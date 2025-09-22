@@ -215,13 +215,28 @@ class TacitEncoderModule(outer: TacitEncoder) extends LazyTraceEncoderModule(out
   // pipeline of ingress data
   val ingress_0 = RegInit(0.U.asTypeOf(new TraceCoreInterface(outer.coreParams)))
   val ingress_1 = RegInit(0.U.asTypeOf(new TraceCoreInterface(outer.coreParams)))
+  val ingress_1_queue = Module(new Queue(0.U.asTypeOf(new TraceCoreInterface(outer.coreParams)), outer.bufferDepth))
 
   // shift every cycle, if not stalled
   val pipeline_advance = Wire(Bool())
-  pipeline_advance := io.in.group(0).iretire === 1.U
-  when (pipeline_advance) {
-    ingress_0 := io.in
-    ingress_1 := ingress_0
+  pipeline_advance := io.in.group.map(g => g.iretire === 1.U).reduce(_ || _) // check for a valid instruction packet
+
+  when (pipeline_advance) {    
+    // Make sure this is correct - check for any messages in the input packet - if no messages, reset ingress 0
+    when (io.in.group.map(g => g.itype =/= TraceItype.ITNothing && g.iretire === 1.U).reduce(_ || _)) {
+      ingress_0 := io.in
+    } .otherwise {
+      ingress_0 := 0.U
+    }
+    
+    ingress_1 := ingress_0 // to be deleted
+
+    // only enqueue entries when they actually exist
+    when (ingress_0.group.map(g=> g.iretire === 1.U).reduce(_ || _)) {
+      ingress_1_queue.io.enq.valid := true.B
+      ingress_1_queue.io.enq.bits := ingress_0
+    }
+    
   }
 
   // encoders
@@ -332,22 +347,28 @@ class TacitEncoderModule(outer: TacitEncoder) extends LazyTraceEncoderModule(out
     ingress_0_group_n
   - youngest instruction -
   */
+
   val ingress_0_has_message = ingress_0.group.map(g => g.itype =/= TraceItype.ITNothing && g.iretire === 1.U).reduce(_ || _)
   val ingress_0_has_branch = ingress_0.group.map(g => (g.itype === TraceItype.ITBrTaken || g.itype === TraceItype.ITBrNTaken) && g.iretire === 1.U).reduce(_ || _)
   val ingress_0_has_ij = ingress_0.group.map(g => (g.itype === TraceItype.ITInJump) && g.iretire === 1.U).reduce(_ || _)
   val ingress_0_has_flush = ingress_0_has_message && !ingress_0_has_branch && !ingress_0_has_ij
   val ingress_0_msg_idx = PriorityEncoder(ingress_0.group.map(g => g.itype =/= TraceItype.ITNothing && g.iretire === 1.U))
   
-  val ingress_1_has_message = ingress_1.group.map(g => g.itype =/= TraceItype.ITNothing && g.iretire === 1.U).reduce(_ || _)
-  val ingress_1_has_branch = ingress_1.group.map(g => (g.itype === TraceItype.ITBrTaken || g.itype === TraceItype.ITBrNTaken) && g.iretire === 1.U).reduce(_ || _)
+
+  // at this point there should only be valid (message-containing) entries in ingress 1 queue
+  val ingress_1_has_message = ingress_1_queue.deq.bits.group.map(g => g.itype =/= TraceItype.ITNothing && g.iretire === 1.U).reduce(_ || _)
+  val ingress_1_has_branch = ingress_1_queue.deq.bits.group.map(g => (g.itype === TraceItype.ITBrTaken || g.itype === TraceItype.ITBrNTaken) && g.iretire === 1.U).reduce(_ || _)
   val ingress_1_has_packet = Mux(is_bp_mode, ingress_1_has_message && !ingress_1_has_branch, ingress_1_has_message)
-  val ingress_1_msg_idx = PriorityEncoder(ingress_1.group.map(g => g.itype =/= TraceItype.ITNothing && g.iretire === 1.U))
+  val ingress_1_msg_idx = PriorityEncoder(ingress_1_queue.deq.bits.group.map(g => g.itype =/= TraceItype.ITNothing && g.iretire === 1.U))
 
-  val ingress_1_valid_count = PopCount(ingress_1.group.map(g => g.iretire === 1.U))
+  val ingress_1_valid_count = PopCount(ingress_1_queue.deq.bits.group.map(g => g.iretire === 1.U))
 
+  // this needs to be adjusted to not only read within a group but within the queue
+  /************* FIX ME ***************/ 
   val target_addr_msg = Mux(ingress_1_msg_idx === (ingress_1_valid_count - 1.U), // am I the last message?
                             (ingress_1.group(ingress_1_msg_idx).iaddr ^ ingress_0.group(0).iaddr) >> 1.U,
                             (ingress_1.group(ingress_1_msg_idx).iaddr ^ ingress_1.group(ingress_1_msg_idx + 1.U).iaddr) >> 1.U)
+  /************* FIX ME ***************/ 
 
   // driving branch predictor signals
   bp.io.req_pc := ingress_0.group(ingress_0_msg_idx).iaddr
