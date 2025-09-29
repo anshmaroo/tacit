@@ -13,6 +13,8 @@ import shuttle.common.{ShuttleTile, ShuttleTileAttachParams}
 import freechips.rocketchip.trace._
 import testchipip.soc.{SubsystemInjector, SubsystemInjectorKey}
 
+import boom.v3.common.BoomTileAttachParams
+
 case class TraceSinkDMAParams(
   regNodeBaseAddr: BigInt,
   beatBytes: Int
@@ -151,6 +153,18 @@ class WithTraceSinkDMA(targetId: Int = 1) extends Config((site, here, up) => {
       )
     }
     case tp: ShuttleTileAttachParams => {
+      val xBytes = tp.tileParams.core.xLen / 8
+      tp.copy(tileParams = tp.tileParams.copy(
+        traceParams = Some(tp.tileParams.traceParams.get.copy(buildSinks = 
+          tp.tileParams.traceParams.get.buildSinks :+ (p => 
+            (LazyModule(new TraceSinkDMA(TraceSinkDMAParams(
+            regNodeBaseAddr = 0x3010000 + tp.tileParams.tileId * 0x1000,
+            beatBytes = xBytes
+        ))(p)), targetId)))))
+      )
+    }
+    case tp: BoomTileAttachParams  => {
+      // redefine tile level constants
       val xBytes = tp.tileParams.core.xLen / 8
       tp.copy(tileParams = tp.tileParams.copy(
         traceParams = Some(tp.tileParams.traceParams.get.copy(buildSinks = 
