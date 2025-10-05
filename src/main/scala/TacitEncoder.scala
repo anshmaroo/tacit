@@ -255,11 +255,12 @@ class TacitEncoderModule(outer: TacitEncoder)
     .map(g => g.iretire === 1.U)
     .reduce(_ || _) && !ingress_1_queue.io.stall // check for a valid instruction packet
 
-  stall := ingress_1_queue.io.stall
-
+  ingress_1_queue.io.entry := DontCare
   ingress_1_queue.io.entry_valid := false.B
   ingress_1_queue.io.dequeue := false.B
-  ingress_1_queue.io.invalidate_current_entry_idx := false.B
+  ingress_1_queue.io.invalidate_current_entry_insn := false.B
+  ingress_1_queue.io.invalidate_current_entry_idx := DontCare
+  
 
   when(pipeline_advance) {
     ingress_0 := io.in
@@ -387,7 +388,7 @@ class TacitEncoderModule(outer: TacitEncoder)
   ) || stallThreshold(time_buffer.io.count) || stallThreshold(
     byte_buffer.io.count
   )
-  io.stall := stall
+  io.stall := stall | ingress_1_queue.io.stall
 
   val sent = RegInit(false.B)
   // reset takes priority over enqueue

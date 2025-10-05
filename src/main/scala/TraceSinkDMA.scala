@@ -13,7 +13,7 @@ import shuttle.common.{ShuttleTile, ShuttleTileAttachParams}
 import freechips.rocketchip.trace._
 import testchipip.soc.{SubsystemInjector, SubsystemInjectorKey}
 
-import boom.v3.common.BoomTileAttachParams
+import boom.v3.common.{BoomTile, BoomTileAttachParams}
 
 case class TraceSinkDMAParams(
   regNodeBaseAddr: BigInt,
@@ -141,7 +141,6 @@ class TraceSinkDMA(params: TraceSinkDMAParams)(implicit p: Parameters) extends L
 class WithTraceSinkDMA(targetId: Int = 1) extends Config((site, here, up) => {
   case TilesLocated(InSubsystem) => up(TilesLocated(InSubsystem), site) map {
     case tp: RocketTileAttachParams => {
-      // redefine tile level constants
       val xBytes = tp.tileParams.core.xLen / 8
       tp.copy(tileParams = tp.tileParams.copy(
         traceParams = Some(tp.tileParams.traceParams.get.copy(buildSinks = 
@@ -164,7 +163,6 @@ class WithTraceSinkDMA(targetId: Int = 1) extends Config((site, here, up) => {
       )
     }
     case tp: BoomTileAttachParams  => {
-      // redefine tile level constants
       val xBytes = tp.tileParams.core.xLen / 8
       tp.copy(tileParams = tp.tileParams.copy(
         traceParams = Some(tp.tileParams.traceParams.get.copy(buildSinks = 
@@ -187,6 +185,7 @@ case object TraceSinkDMAInjector extends SubsystemInjector((p, baseSubsystem) =>
   val traceSinkDMAs = hierarchicalSubsystem.totalTiles.values.map { t => t match {
     case r: RocketTile => r.trace_sinks.collect { case r: TraceSinkDMA => (t, r) }
     case s: ShuttleTile => s.trace_sinks.collect { case r: TraceSinkDMA => (t, r) }
+    case b: BoomTile => b.trace_sinks.collect { case r: TraceSinkDMA => (t, r) }
     case _ => Nil
   }}.flatten
   if (traceSinkDMAs.nonEmpty) {

@@ -39,6 +39,7 @@ class PacketQueue(depth: Int, params: TraceCoreParams) extends Module {
     // status
     // val full = Wire(Bool())
     val count = RegInit(0.U((IDX_WIDTH + 1).W))
+    val stall = RegInit(0.U(1.W))
 
     // outputs
     io.current_entry := mem(tail)
@@ -46,7 +47,8 @@ class PacketQueue(depth: Int, params: TraceCoreParams) extends Module {
     io.next_entry := mem(tail + 1.U)
     io.next_entry_valid := count > 1.U
 
-    io.stall := false.B
+    stall := false.B
+    io.stall := stall
 
     when (io.invalidate_current_entry_insn) {
         mem(tail).group(io.invalidate_current_entry_idx).iretire := 0.U
@@ -58,7 +60,7 @@ class PacketQueue(depth: Int, params: TraceCoreParams) extends Module {
             head := head + 1.U
             count := count + 1.U
         } .otherwise {
-            io.stall := true.B
+            stall := true.B
         }
     }
 
