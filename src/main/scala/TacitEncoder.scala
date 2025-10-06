@@ -318,7 +318,7 @@ class TacitEncoderModule(outer: TacitEncoder)
 
   // intermediate packet signals
   val is_compressed = Wire(Bool())
-  val delta_time = ingress_1.time - prev_time
+  val delta_time = ingress_1_queue.io.current_entry.time - prev_time
   val packet_valid = Wire(Bool())
   val header_byte = Wire(UInt(8.W)) // full header
   val comp_packet = Wire(UInt(8.W)) // compressed packet
@@ -557,7 +557,7 @@ class TacitEncoderModule(outer: TacitEncoder)
           )
           comp_header := CompressedHeaderType.CNT.asUInt
           time_encoder.io.input_value := delta_time
-          prev_time := Mux(byte_buffer.io.enq.fire, ingress_1.time, prev_time)
+          prev_time := Mux(byte_buffer.io.enq.fire, ingress_1_queue.io.current_entry.time, prev_time)
           is_compressed := delta_time <= MAX_DELTA_TIME_COMP.U
           packet_valid := !sent && is_bp_mode
         } .elsewhen(ingress_1_has_message) {
@@ -692,8 +692,10 @@ class TacitEncoderModule(outer: TacitEncoder)
               packet_valid := !sent
             }
           }
+          printf("entry is valid!")
         } .elsewhen(!ingress_1_has_message) {
           ingress_1_queue.io.dequeue := true.B
+          printf("invalidating entry!")
         }
       }
     }
