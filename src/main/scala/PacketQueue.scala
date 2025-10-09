@@ -66,7 +66,7 @@ class PacketQueue(depth: Int, params: TraceCoreParams) extends Module {
 
     when (io.dequeue && count > 0.U) {
         tail := tail + 1.U;
-        count := count - 1.U;
+        count := count - 1.U;   
     }
 
 }

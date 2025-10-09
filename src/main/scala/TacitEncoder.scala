@@ -10,6 +10,7 @@ import freechips.rocketchip.trace._
 
 import org.chipsalliance.cde.config.Parameters
 
+
 object FullHeaderType extends ChiselEnum {
   val FTakenBranch = Value(0x0.U) // 000
   val FNotTakenBranch = Value(0x1.U) // 001
@@ -239,9 +240,6 @@ class TacitEncoderModule(outer: TacitEncoder)
   val ingress_0 = RegInit(
     0.U.asTypeOf(new TraceCoreInterface(outer.coreParams))
   )
-  val ingress_1 = RegInit(
-    0.U.asTypeOf(new TraceCoreInterface(outer.coreParams))
-  )
   val ingress_1_queue = Module(
     new PacketQueue(
       outer.bufferDepth,
@@ -255,11 +253,9 @@ class TacitEncoderModule(outer: TacitEncoder)
     .map(g => g.iretire === 1.U)
     .reduce(_ || _) && !ingress_1_queue.io.stall // check for a valid instruction packet
 
-  ingress_1_queue.io.entry := DontCare
+  ingress_1_queue.io.entry := 0.U
   ingress_1_queue.io.entry_valid := false.B
   ingress_1_queue.io.dequeue := false.B
-  ingress_1_queue.io.invalidate_current_entry_insn := false.B
-  ingress_1_queue.io.invalidate_current_entry_idx := DontCare
   
 
   when(pipeline_advance) {
@@ -371,16 +367,16 @@ class TacitEncoderModule(outer: TacitEncoder)
     Mux(bp_flush_hit, bp_hit_packet, comp_packet),
     header_byte
   )
-  byte_buffer.io.enq.valid := packet_valid
+  byte_buffer.io.enq.valid := packet_valid && (ingress_1_queue.io.current_entry_valid)
   // trap address buffering
   trap_addr_buffer.io.enq.bits := full_trap_addr
-  trap_addr_buffer.io.enq.valid := !is_compressed && packet_valid && encode_trap_addr_valid
+  trap_addr_buffer.io.enq.valid := !is_compressed && packet_valid && encode_trap_addr_valid && (ingress_1_queue.io.current_entry_valid)
   // target address buffering
   target_addr_buffer.io.enq.bits := full_target_addr
-  target_addr_buffer.io.enq.valid := !is_compressed && packet_valid && encode_target_addr_valid
+  target_addr_buffer.io.enq.valid := !is_compressed && packet_valid && encode_target_addr_valid && (ingress_1_queue.io.current_entry_valid)
   // time buffering
   time_buffer.io.enq.bits := full_time
-  time_buffer.io.enq.valid := !is_compressed && packet_valid
+  time_buffer.io.enq.valid := !is_compressed && packet_valid && (ingress_1_queue.io.current_entry_valid)
 
   // stall if any buffer is almost full TODO: optimize
   stall := stallThreshold(trap_addr_buffer.io.count) || stallThreshold(
@@ -451,9 +447,8 @@ class TacitEncoderModule(outer: TacitEncoder)
     )
   )
 
-  val ingress_1_valid_count = PopCount(
-    ingress_1_queue.io.current_entry.group.map(g => g.iretire === 1.U)
-  )
+  val ingress_1_valid_count = Mux((ingress_1_queue.io.current_entry_valid), PopCount(
+    ingress_1_queue.io.current_entry.group.map(g => g.iretire === 1.U)), 0.U,)
 
   val target_addr_msg = Mux(
     ingress_1_msg_idx === (ingress_1_valid_count - 1.U), // am I the last message?
@@ -499,6 +494,11 @@ class TacitEncoderModule(outer: TacitEncoder)
   encode_trap_addr_valid := false.B
   comp_header := CompressedHeaderType.CNA.asUInt
   header_byte := HeaderByte(FullHeaderType.FReserved, TrapType.TNone)
+
+
+  ingress_1_queue.io.invalidate_current_entry_insn := ingress_1_has_message
+  ingress_1_queue.io.invalidate_current_entry_idx := ingress_1_msg_idx
+
   // state machine
   switch(state) {
     is(sIdle) {
@@ -550,6 +550,7 @@ class TacitEncoderModule(outer: TacitEncoder)
           is_compressed := bp_hit_count <= MAX_DELTA_TIME_COMP.U
           packet_valid := !sent && is_bp_mode
         }.elsewhen(bp_miss_flag && is_bp_mode) {
+          printf("bp mode is on, detected a not taken branch")
           // encode miss packet
           header_byte := HeaderByte(
             FullHeaderType.FNotTakenBranch,
@@ -561,8 +562,6 @@ class TacitEncoderModule(outer: TacitEncoder)
           is_compressed := delta_time <= MAX_DELTA_TIME_COMP.U
           packet_valid := !sent && is_bp_mode
         } .elsewhen(ingress_1_has_message) {
-          ingress_1_queue.io.invalidate_current_entry_idx := ingress_1_msg_idx
-          ingress_1_queue.io.invalidate_current_entry_idx := true.B
           switch(ingress_1_queue.io.current_entry.group(ingress_1_msg_idx).itype) {
             is(TraceItype.ITNothing) {
               packet_valid := false.B
@@ -690,12 +689,14 @@ class TacitEncoderModule(outer: TacitEncoder)
               encode_trap_addr_valid := true.B
               is_compressed := false.B
               packet_valid := !sent
+              
             }
           }
-          printf("entry is valid!")
+          for (i <- 0 until ingress_1_queue.io.current_entry.group.length) {
+            printf("\tentry: %x, idx: %x, instruction retired: %x\n", ingress_1_queue.io.current_entry.group(i).iaddr, ingress_1_msg_idx, ingress_1_queue.io.current_entry.group(i).iretire)
+          }
         } .elsewhen(!ingress_1_has_message) {
           ingress_1_queue.io.dequeue := true.B
-          printf("invalidating entry!")
         }
       }
     }
