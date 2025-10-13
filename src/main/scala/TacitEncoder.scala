@@ -10,7 +10,6 @@ import freechips.rocketchip.trace._
 
 import org.chipsalliance.cde.config.Parameters
 
-
 object FullHeaderType extends ChiselEnum {
   val FTakenBranch = Value(0x0.U) // 000
   val FNotTakenBranch = Value(0x1.U) // 001
@@ -251,12 +250,15 @@ class TacitEncoderModule(outer: TacitEncoder)
   val pipeline_advance = Wire(Bool())
   pipeline_advance := io.in.group
     .map(g => g.iretire === 1.U)
-    .reduce(_ || _) && !ingress_1_queue.io.stall // check for a valid instruction packet
+    .reduce(
+      _ || _
+    ) && !ingress_1_queue.io.stall // check for a valid instruction packet
 
-  ingress_1_queue.io.entry := 0.U
+  ingress_1_queue.io.entry := 0.U.asTypeOf(
+    new TraceCoreInterface(outer.coreParams)
+  )
   ingress_1_queue.io.entry_valid := false.B
   ingress_1_queue.io.dequeue := false.B
-  
 
   when(pipeline_advance) {
     ingress_0 := io.in
@@ -447,8 +449,13 @@ class TacitEncoderModule(outer: TacitEncoder)
     )
   )
 
-  val ingress_1_valid_count = Mux((ingress_1_queue.io.current_entry_valid), PopCount(
-    ingress_1_queue.io.current_entry.group.map(g => g.iretire === 1.U)), 0.U,)
+  val ingress_1_valid_count = Mux(
+    (ingress_1_queue.io.current_entry_valid),
+    PopCount(
+      ingress_1_queue.io.current_entry.group.map(g => g.iretire === 1.U)
+    ),
+    0.U
+  )
 
   val target_addr_msg = Mux(
     ingress_1_msg_idx === (ingress_1_valid_count - 1.U), // am I the last message?
@@ -494,7 +501,6 @@ class TacitEncoderModule(outer: TacitEncoder)
   encode_trap_addr_valid := false.B
   comp_header := CompressedHeaderType.CNA.asUInt
   header_byte := HeaderByte(FullHeaderType.FReserved, TrapType.TNone)
-
 
   ingress_1_queue.io.invalidate_current_entry_insn := ingress_1_has_message
   ingress_1_queue.io.invalidate_current_entry_idx := ingress_1_msg_idx
@@ -558,11 +564,17 @@ class TacitEncoderModule(outer: TacitEncoder)
           )
           comp_header := CompressedHeaderType.CNT.asUInt
           time_encoder.io.input_value := delta_time
-          prev_time := Mux(byte_buffer.io.enq.fire, ingress_1_queue.io.current_entry.time, prev_time)
+          prev_time := Mux(
+            ingress_1_valid_count === 1.U,
+            ingress_1_queue.io.current_entry.time,
+            prev_time
+          )
           is_compressed := delta_time <= MAX_DELTA_TIME_COMP.U
           packet_valid := !sent && is_bp_mode
-        } .elsewhen(ingress_1_has_message) {
-          switch(ingress_1_queue.io.current_entry.group(ingress_1_msg_idx).itype) {
+        }.elsewhen(ingress_1_has_message) {
+          switch(
+            ingress_1_queue.io.current_entry.group(ingress_1_msg_idx).itype
+          ) {
             is(TraceItype.ITNothing) {
               packet_valid := false.B
             }
@@ -574,7 +586,7 @@ class TacitEncoderModule(outer: TacitEncoder)
               comp_header := CompressedHeaderType.CTB.asUInt
               time_encoder.io.input_value := delta_time
               prev_time := Mux(
-                byte_buffer.io.enq.fire,
+                ingress_1_valid_count === 1.U,
                 ingress_1_queue.io.current_entry.time,
                 prev_time
               )
@@ -589,7 +601,7 @@ class TacitEncoderModule(outer: TacitEncoder)
               comp_header := CompressedHeaderType.CNT.asUInt
               time_encoder.io.input_value := delta_time
               prev_time := Mux(
-                byte_buffer.io.enq.fire,
+                ingress_1_valid_count === 1.U,
                 ingress_1_queue.io.current_entry.time,
                 prev_time
               )
@@ -604,7 +616,7 @@ class TacitEncoderModule(outer: TacitEncoder)
               comp_header := CompressedHeaderType.CIJ.asUInt
               time_encoder.io.input_value := delta_time
               prev_time := Mux(
-                byte_buffer.io.enq.fire,
+                ingress_1_valid_count === 1.U,
                 ingress_1_queue.io.current_entry.time,
                 prev_time
               )
@@ -618,7 +630,7 @@ class TacitEncoderModule(outer: TacitEncoder)
               )
               time_encoder.io.input_value := delta_time
               prev_time := Mux(
-                byte_buffer.io.enq.fire,
+                ingress_1_valid_count === 1.U,
                 ingress_1_queue.io.current_entry.time,
                 prev_time
               )
@@ -635,7 +647,7 @@ class TacitEncoderModule(outer: TacitEncoder)
               comp_header := CompressedHeaderType.CNA.asUInt
               time_encoder.io.input_value := delta_time
               prev_time := Mux(
-                byte_buffer.io.enq.fire,
+                ingress_1_valid_count === 1.U,
                 ingress_1_queue.io.current_entry.time,
                 prev_time
               )
@@ -656,7 +668,7 @@ class TacitEncoderModule(outer: TacitEncoder)
               comp_header := CompressedHeaderType.CNA.asUInt
               time_encoder.io.input_value := delta_time
               prev_time := Mux(
-                byte_buffer.io.enq.fire,
+                ingress_1_valid_count === 1.U,
                 ingress_1_queue.io.current_entry.time,
                 prev_time
               )
@@ -677,7 +689,7 @@ class TacitEncoderModule(outer: TacitEncoder)
               comp_header := CompressedHeaderType.CNA.asUInt
               time_encoder.io.input_value := delta_time
               prev_time := Mux(
-                byte_buffer.io.enq.fire,
+                ingress_1_valid_count === 1.U,
                 ingress_1_queue.io.current_entry.time,
                 prev_time
               )
@@ -689,16 +701,28 @@ class TacitEncoderModule(outer: TacitEncoder)
               encode_trap_addr_valid := true.B
               is_compressed := false.B
               packet_valid := !sent
-              
+
             }
           }
+          printf(
+            "header byte set to %x for instruction at address %x. current time: %x, previous time: %x, delta time: %x\n",
+            header_byte,
+            ingress_1_queue.io.current_entry.group(ingress_1_msg_idx).iaddr, ingress_1_queue.io.current_entry.time , prev_time, delta_time
+          )
           for (i <- 0 until ingress_1_queue.io.current_entry.group.length) {
-            printf("\tentry: %x, idx: %x, instruction retired: %x\n", ingress_1_queue.io.current_entry.group(i).iaddr, ingress_1_msg_idx, ingress_1_queue.io.current_entry.group(i).iretire)
+            printf(
+              "\tentry: %x, idx: %x, instruction retired: %x\n",
+              ingress_1_queue.io.current_entry.group(i).iaddr,
+              ingress_1_msg_idx,
+              ingress_1_queue.io.current_entry.group(i).iretire
+            )
           }
-        } .elsewhen(!ingress_1_has_message) {
-          ingress_1_queue.io.dequeue := true.B
         }
       }
     }
+  }
+
+  when(!ingress_1_has_message || ingress_1_valid_count === 1.U) {
+    ingress_1_queue.io.dequeue := true.B
   }
 }
