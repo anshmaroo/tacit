@@ -116,6 +116,7 @@ class TracePacketizer(val coreParams: TraceCoreParams) extends Module {
     log2Ceil(timeMaxNumBytes) + 1
   )
   val time_metadata = io.metadata.bits(log2Ceil(timeMaxNumBytes), 1)
+  printf("time num_bytes for packet with header %x: %x\n", io.byte.bits, time_num_bytes)
 
   // default values
   io.out.valid := false.B
@@ -316,7 +317,8 @@ class TacitEncoderModule(outer: TacitEncoder)
 
   // intermediate packet signals
   val is_compressed = Wire(Bool())
-  val delta_time = ingress_1_queue.io.current_entry.time - prev_time
+  val delta_time = (ingress_1_queue.io.current_entry.time - prev_time)
+  dontTouch(delta_time)
   val packet_valid = Wire(Bool())
   val header_byte = Wire(UInt(8.W)) // full header
   val comp_packet = Wire(UInt(8.W)) // compressed packet
@@ -362,7 +364,7 @@ class TacitEncoderModule(outer: TacitEncoder)
     is_compressed
   )
   metadata_buffer.io.enq.bits := metadata
-  metadata_buffer.io.enq.valid := packet_valid
+  metadata_buffer.io.enq.valid := packet_valid && (ingress_1_queue.io.current_entry_valid)
   // buffering compressed packet or full header depending on is_compressed
   byte_buffer.io.enq.bits := Mux(
     is_compressed,
@@ -494,6 +496,10 @@ class TacitEncoderModule(outer: TacitEncoder)
   // default values
   trap_addr_encoder.io.input_value := 0.U
   target_addr_encoder.io.input_value := 0.U
+  assert(
+    !(ingress_1_queue.io.current_entry.time - prev_time =/= delta_time),
+    "delta time is not matching!"
+  )
   time_encoder.io.input_value := 0.U
   is_compressed := false.B
   packet_valid := false.B
@@ -512,6 +518,10 @@ class TacitEncoderModule(outer: TacitEncoder)
     }
     is(sSync) {
       header_byte := HeaderByte(FullHeaderType.FSync, TrapType.TNone)
+      assert(
+        !(ingress_1_queue.io.current_entry.time - prev_time =/= delta_time),
+        "delta time is not matching!"
+      )
       time_encoder.io.input_value := ingress_0.time
       prev_time := ingress_0.time
       target_addr_encoder.io.input_value := ingress_0
@@ -552,6 +562,10 @@ class TacitEncoderModule(outer: TacitEncoder)
           // encode hit packet
           header_byte := HeaderByte(FullHeaderType.FTakenBranch, TrapType.TNone)
           comp_header := CompressedHeaderType.CTB.asUInt
+          assert(
+            !(ingress_1_queue.io.current_entry.time - prev_time =/= delta_time),
+            "delta time is not matching!"
+          )
           time_encoder.io.input_value := bp_hit_count
           is_compressed := bp_hit_count <= MAX_DELTA_TIME_COMP.U
           packet_valid := !sent && is_bp_mode
@@ -563,6 +577,10 @@ class TacitEncoderModule(outer: TacitEncoder)
             TrapType.TNone
           )
           comp_header := CompressedHeaderType.CNT.asUInt
+          assert(
+            !(ingress_1_queue.io.current_entry.time - prev_time =/= delta_time),
+            "delta time is not matching!"
+          )
           time_encoder.io.input_value := delta_time
           prev_time := Mux(
             ingress_1_valid_count === 1.U,
@@ -584,6 +602,10 @@ class TacitEncoderModule(outer: TacitEncoder)
                 TrapType.TNone
               )
               comp_header := CompressedHeaderType.CTB.asUInt
+              assert(
+                !(ingress_1_queue.io.current_entry.time - prev_time =/= delta_time),
+                "delta time is not matching!"
+              )
               time_encoder.io.input_value := delta_time
               prev_time := Mux(
                 ingress_1_valid_count === 1.U,
@@ -599,6 +621,10 @@ class TacitEncoderModule(outer: TacitEncoder)
                 TrapType.TNone
               )
               comp_header := CompressedHeaderType.CNT.asUInt
+              assert(
+                !(ingress_1_queue.io.current_entry.time - prev_time =/= delta_time),
+                "delta time is not matching!"
+              )
               time_encoder.io.input_value := delta_time
               prev_time := Mux(
                 ingress_1_valid_count === 1.U,
@@ -614,6 +640,10 @@ class TacitEncoderModule(outer: TacitEncoder)
                 TrapType.TNone
               )
               comp_header := CompressedHeaderType.CIJ.asUInt
+              assert(
+                !(ingress_1_queue.io.current_entry.time - prev_time =/= delta_time),
+                "delta time is not matching!"
+              )
               time_encoder.io.input_value := delta_time
               prev_time := Mux(
                 ingress_1_valid_count === 1.U,
@@ -627,6 +657,10 @@ class TacitEncoderModule(outer: TacitEncoder)
               header_byte := HeaderByte(
                 FullHeaderType.FUninfJump,
                 TrapType.TNone
+              )
+              assert(
+                !(ingress_1_queue.io.current_entry.time - prev_time =/= delta_time),
+                "delta time is not matching!"
               )
               time_encoder.io.input_value := delta_time
               prev_time := Mux(
@@ -645,6 +679,10 @@ class TacitEncoderModule(outer: TacitEncoder)
                 TrapType.TException
               )
               comp_header := CompressedHeaderType.CNA.asUInt
+              assert(
+                !(ingress_1_queue.io.current_entry.time - prev_time =/= delta_time),
+                "delta time is not matching!"
+              )
               time_encoder.io.input_value := delta_time
               prev_time := Mux(
                 ingress_1_valid_count === 1.U,
@@ -666,6 +704,10 @@ class TacitEncoderModule(outer: TacitEncoder)
                 TrapType.TInterrupt
               )
               comp_header := CompressedHeaderType.CNA.asUInt
+              assert(
+                !(ingress_1_queue.io.current_entry.time - prev_time =/= delta_time),
+                "delta time is not matching!"
+              )
               time_encoder.io.input_value := delta_time
               prev_time := Mux(
                 ingress_1_valid_count === 1.U,
@@ -687,6 +729,10 @@ class TacitEncoderModule(outer: TacitEncoder)
                 TrapType.TReturn
               )
               comp_header := CompressedHeaderType.CNA.asUInt
+              assert(
+                !(ingress_1_queue.io.current_entry.time - prev_time =/= delta_time),
+                "delta time is not matching!"
+              )
               time_encoder.io.input_value := delta_time
               prev_time := Mux(
                 ingress_1_valid_count === 1.U,
@@ -707,7 +753,10 @@ class TacitEncoderModule(outer: TacitEncoder)
           printf(
             "header byte set to %x for instruction at address %x. current time: %x, previous time: %x, delta time: %x\n",
             header_byte,
-            ingress_1_queue.io.current_entry.group(ingress_1_msg_idx).iaddr, ingress_1_queue.io.current_entry.time , prev_time, delta_time
+            ingress_1_queue.io.current_entry.group(ingress_1_msg_idx).iaddr,
+            ingress_1_queue.io.current_entry.time,
+            prev_time,
+            delta_time
           )
           for (i <- 0 until ingress_1_queue.io.current_entry.group.length) {
             printf(

@@ -74,5 +74,7 @@ class PacketQueue(val depth: Int, val coreParams: TraceCoreParams) extends Modul
     queue(head) := modified_entry
   }
   
+  printf("number of packets in queue: %x\n", count)
+
   assert(!(count === 0.U && head =/= tail), "FIFO pointers out of sync when empty!")
 }
