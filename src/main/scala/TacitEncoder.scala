@@ -156,6 +156,7 @@ class TracePacketizer(val coreParams: TraceCoreParams) extends Module {
     }
     is(pComp) {
       // transmit a byte from byte buffer
+      printf("\ttransmitting byte %x from byte buffer\n", io.byte.bits);
       io.byte.ready := io.out.ready
       io.out.valid := io.byte.valid
       io.out.bits := io.byte.bits
@@ -169,22 +170,26 @@ class TracePacketizer(val coreParams: TraceCoreParams) extends Module {
       // header, addr, time
       io.out.valid := true.B
       when(header_num_bytes > 0.U && header_index < header_num_bytes) {
+        printf("\ttransmitting header %x\n", io.byte.bits);
         io.out.bits := io.byte.bits
         io.out.valid := io.byte.valid
         header_index := header_index + io.out.fire
       }.elsewhen(
         trap_addr_num_bytes > 0.U && trap_addr_index < trap_addr_num_bytes
       ) {
+        printf("\ttransmitting trap address %x\n", io.trap_addr.bits(trap_addr_index));
         io.out.bits := io.trap_addr.bits(trap_addr_index)
         io.out.valid := io.trap_addr.valid
         trap_addr_index := trap_addr_index + io.out.fire
       }.elsewhen(
         target_addr_num_bytes > 0.U && target_addr_index < target_addr_num_bytes
       ) {
+        printf("\ttransmitting target address %x\n", io.target_addr.bits(target_addr_index));
         io.out.bits := io.target_addr.bits(target_addr_index)
         io.out.valid := io.target_addr.valid
         target_addr_index := target_addr_index + io.out.fire
       }.elsewhen(time_num_bytes > 0.U && time_index < time_num_bytes) {
+        printf("\ttransmitting time %x\n", io.time.bits(time_index));
         io.out.bits := io.time.bits(time_index)
         io.out.valid := io.time.valid
         time_index := time_index + io.out.fire
@@ -451,6 +456,12 @@ class TacitEncoderModule(outer: TacitEncoder)
     )
   )
 
+  val ingress_1_next_msg_idx = PriorityEncoder(
+    ingress_1_queue.io.next_entry.group.map(g =>
+      g.itype =/= TraceItype.ITNothing && g.iretire === 1.U
+    )
+  )
+
   val ingress_1_valid_count = Mux(
     (ingress_1_queue.io.current_entry_valid),
     PopCount(
@@ -459,16 +470,28 @@ class TacitEncoderModule(outer: TacitEncoder)
     0.U
   )
 
+  val next_address = Mux(
+    ingress_1_msg_idx === (outer.coreParams.nGroups.asUInt - 1.U) || ingress_1_valid_count === 1.U, // am I the last message?
+    Mux(
+      ingress_1_queue.io.next_entry_valid,
+      (ingress_1_queue.io.next_entry.group(ingress_1_next_msg_idx).iaddr),
+      (ingress_0.group(ingress_0_msg_idx).iaddr)
+    ),
+    (ingress_1_queue.io.current_entry
+      .group(ingress_1_msg_idx + 1.U)
+      .iaddr)
+  )
+
   val target_addr_msg = Mux(
-    ingress_1_msg_idx === (ingress_1_valid_count - 1.U), // am I the last message?
+    ingress_1_msg_idx === (outer.coreParams.nGroups.asUInt - 1.U) || ingress_1_valid_count === 1.U, // am I the last message?
     Mux(
       ingress_1_queue.io.next_entry_valid,
       (ingress_1_queue.io.current_entry
         .group(ingress_1_msg_idx)
-        .iaddr ^ ingress_1_queue.io.next_entry.group(0).iaddr) >> 1.U,
+        .iaddr ^ ingress_1_queue.io.next_entry.group(ingress_1_next_msg_idx).iaddr) >> 1.U,
       (ingress_1_queue.io.current_entry
         .group(ingress_1_msg_idx)
-        .iaddr ^ ingress_0.group(0).iaddr) >> 1.U
+        .iaddr ^ ingress_0.group(ingress_0_msg_idx).iaddr) >> 1.U
     ),
     (ingress_1_queue.io.current_entry
       .group(ingress_1_msg_idx)
@@ -476,6 +499,7 @@ class TacitEncoderModule(outer: TacitEncoder)
       .group(ingress_1_msg_idx + 1.U)
       .iaddr) >> 1.U
   )
+  printf("ingress 1 address: %x, next address: %x, target address: %x\n", ingress_1_queue.io.current_entry.group(ingress_1_msg_idx).iaddr, next_address, target_addr_msg)
 
   // driving branch predictor signals
   bp.io.req_pc := ingress_0.group(ingress_0_msg_idx).iaddr
@@ -758,11 +782,11 @@ class TacitEncoderModule(outer: TacitEncoder)
             prev_time,
             delta_time
           )
-          for (i <- 0 until ingress_1_queue.io.current_entry.group.length) {
+          for (i <- 0 until outer.coreParams.nGroups) {
             printf(
               "\tentry: %x, idx: %x, instruction retired: %x\n",
               ingress_1_queue.io.current_entry.group(i).iaddr,
-              ingress_1_msg_idx,
+              i.asUInt,
               ingress_1_queue.io.current_entry.group(i).iretire
             )
           }
