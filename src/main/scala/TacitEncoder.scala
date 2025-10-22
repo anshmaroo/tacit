@@ -434,6 +434,9 @@ class TacitEncoderModule(outer: TacitEncoder)
       g.itype =/= TraceItype.ITNothing && g.iretire === 1.U
     )
   )
+  val ingress_0_insn_idx = PriorityEncoder(
+    ingress_0.group.map(g => g.iretire === 1.U)
+  )
 
   val ingress_1_has_message =
     (ingress_1_queue.io.current_entry_valid) && ingress_1_queue.io.current_entry.group
@@ -456,9 +459,18 @@ class TacitEncoderModule(outer: TacitEncoder)
     )
   )
 
-  val ingress_1_next_msg_idx = PriorityEncoder(
+  // Mask off all entries up to and including ingress_1_msg_idx
+  val retireMask = UIntToOH(ingress_1_msg_idx) | UIntToOH(ingress_1_msg_idx) - 1.U
+  val maskedRetires = ingress_1_queue.io.current_entry.group.zipWithIndex.map { case (g, i) =>
+    g.iretire === 1.U && !retireMask(i)
+  }
+
+  // Find the next entry with retire = 1
+  val ingress_1_current_entry_next_insn_idx = PriorityEncoder(maskedRetires)
+
+  val ingress_1_next_entry_insn_idx = PriorityEncoder(
     ingress_1_queue.io.next_entry.group.map(g =>
-      g.itype =/= TraceItype.ITNothing && g.iretire === 1.U
+      g.iretire === 1.U
     )
   )
 
@@ -474,11 +486,11 @@ class TacitEncoderModule(outer: TacitEncoder)
     ingress_1_msg_idx === (outer.coreParams.nGroups.asUInt - 1.U) || ingress_1_valid_count === 1.U, // am I the last message?
     Mux(
       ingress_1_queue.io.next_entry_valid,
-      (ingress_1_queue.io.next_entry.group(ingress_1_next_msg_idx).iaddr),
-      (ingress_0.group(ingress_0_msg_idx).iaddr)
+      (ingress_1_queue.io.next_entry.group(ingress_1_next_entry_insn_idx).iaddr),
+      (ingress_0.group(ingress_0_insn_idx).iaddr)
     ),
     (ingress_1_queue.io.current_entry
-      .group(ingress_1_msg_idx + 1.U)
+      .group(ingress_1_current_entry_next_insn_idx)
       .iaddr)
   )
 
@@ -488,15 +500,15 @@ class TacitEncoderModule(outer: TacitEncoder)
       ingress_1_queue.io.next_entry_valid,
       (ingress_1_queue.io.current_entry
         .group(ingress_1_msg_idx)
-        .iaddr ^ ingress_1_queue.io.next_entry.group(ingress_1_next_msg_idx).iaddr) >> 1.U,
+        .iaddr ^ ingress_1_queue.io.next_entry.group(ingress_1_next_entry_insn_idx).iaddr) >> 1.U,
       (ingress_1_queue.io.current_entry
         .group(ingress_1_msg_idx)
-        .iaddr ^ ingress_0.group(ingress_0_msg_idx).iaddr) >> 1.U
+        .iaddr ^ ingress_0.group(ingress_0_insn_idx).iaddr) >> 1.U
     ),
     (ingress_1_queue.io.current_entry
       .group(ingress_1_msg_idx)
       .iaddr ^ ingress_1_queue.io.current_entry
-      .group(ingress_1_msg_idx + 1.U)
+      .group(ingress_1_current_entry_next_insn_idx)
       .iaddr) >> 1.U
   )
   printf("ingress 1 address: %x, next address: %x, target address: %x\n", ingress_1_queue.io.current_entry.group(ingress_1_msg_idx).iaddr, next_address, target_addr_msg)
