@@ -368,8 +368,9 @@ class TacitEncoderModule(outer: TacitEncoder)
     time_num_bytes,
     is_compressed
   )
-  metadata_buffer.io.enq.bits := metadata
-  metadata_buffer.io.enq.valid := packet_valid && (ingress_1_queue.io.current_entry_valid)
+  metadata_buffer.io.enq.bits  := metadata
+  metadata_buffer.io.enq.valid := packet_valid && ingress_1_queue.io.current_entry_valid
+
   // buffering compressed packet or full header depending on is_compressed
   byte_buffer.io.enq.bits := Mux(
     is_compressed,
@@ -393,15 +394,8 @@ class TacitEncoderModule(outer: TacitEncoder)
   ) || stallThreshold(time_buffer.io.count) || stallThreshold(
     byte_buffer.io.count
   )
+  dontTouch(stall)
   io.stall := stall | ingress_1_queue.io.stall
-
-  val sent = RegInit(false.B)
-  // reset takes priority over enqueue
-  when(pipeline_advance || (!byte_buffer.io.enq.fire && ingress_1_queue.io.current_entry_valid)) {
-    sent := false.B
-  }.elsewhen(byte_buffer.io.enq.fire) {
-    sent := true.B
-  }
 
   trap_addr_encoder.io.input_valid := encode_trap_addr_valid && !is_compressed && packet_valid
   target_addr_encoder.io.input_valid := encode_target_addr_valid && !is_compressed && packet_valid
@@ -512,6 +506,14 @@ class TacitEncoderModule(outer: TacitEncoder)
       .iaddr) >> 1.U
   )
   printf("ingress 1 address: %x, next address: %x, target address: %x\n", ingress_1_queue.io.current_entry.group(ingress_1_msg_idx).iaddr, next_address, target_addr_msg)
+
+  val sent = RegInit(false.B)
+  // reset takes priority over enqueue
+  when(pipeline_advance || (!byte_buffer.io.enq.fire && ingress_1_queue.io.current_entry_valid) || (byte_buffer.io.enq.fire && ingress_1_has_message)) {
+    sent := false.B
+  }.elsewhen(byte_buffer.io.enq.fire) {
+    sent := true.B
+  }
 
   // driving branch predictor signals
   bp.io.req_pc := ingress_0.group(ingress_0_msg_idx).iaddr
@@ -807,7 +809,7 @@ class TacitEncoderModule(outer: TacitEncoder)
     }
   }
 
-  when((!ingress_1_has_message || ingress_1_valid_count === 1.U) && ingress_1_queue.io.current_entry_valid) {
+  when((!ingress_1_has_message || (ingress_1_valid_count === 1.U && byte_buffer.io.enq.fire)) && ingress_1_queue.io.current_entry_valid) {
     ingress_1_queue.io.dequeue := true.B
   }
 }
