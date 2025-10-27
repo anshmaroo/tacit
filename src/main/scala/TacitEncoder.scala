@@ -298,6 +298,7 @@ class TacitEncoderModule(outer: TacitEncoder)
   val byte_buffer = Module(
     new Queue(UInt(8.W), outer.bufferDepth)
   ) // buffer compressed packet or full header
+  dontTouch(byte_buffer.io.count)
   val metadata_buffer = Module(
     new Queue(UInt(metadataWidth.W), outer.bufferDepth)
   )
@@ -368,8 +369,6 @@ class TacitEncoderModule(outer: TacitEncoder)
     time_num_bytes,
     is_compressed
   )
-  metadata_buffer.io.enq.bits  := metadata
-  metadata_buffer.io.enq.valid := packet_valid && ingress_1_queue.io.current_entry_valid
 
   // buffering compressed packet or full header depending on is_compressed
   byte_buffer.io.enq.bits := Mux(
@@ -514,6 +513,9 @@ class TacitEncoderModule(outer: TacitEncoder)
   }.elsewhen(byte_buffer.io.enq.fire) {
     sent := true.B
   }
+
+  metadata_buffer.io.enq.bits  := metadata
+  metadata_buffer.io.enq.valid := packet_valid && ingress_1_queue.io.current_entry_valid
 
   // driving branch predictor signals
   bp.io.req_pc := ingress_0.group(ingress_0_msg_idx).iaddr
