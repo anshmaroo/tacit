@@ -116,7 +116,7 @@ class TracePacketizer(val coreParams: TraceCoreParams) extends Module {
     log2Ceil(timeMaxNumBytes) + 1
   )
   val time_metadata = io.metadata.bits(log2Ceil(timeMaxNumBytes), 1)
-  printf("time num_bytes for packet with header %x: %x\n", io.byte.bits, time_num_bytes)
+  // printf("time num_bytes for packet with header %x: %x\n", io.byte.bits, time_num_bytes)
 
   // default values
   io.out.valid := false.B
@@ -156,7 +156,7 @@ class TracePacketizer(val coreParams: TraceCoreParams) extends Module {
     }
     is(pComp) {
       // transmit a byte from byte buffer
-      printf("\ttransmitting byte %x from byte buffer\n", io.byte.bits);
+      // printf("\ttransmitting byte %x from byte buffer\n", io.byte.bits);
       io.byte.ready := io.out.ready
       io.out.valid := io.byte.valid
       io.out.bits := io.byte.bits
@@ -170,26 +170,26 @@ class TracePacketizer(val coreParams: TraceCoreParams) extends Module {
       // header, addr, time
       io.out.valid := true.B
       when(header_num_bytes > 0.U && header_index < header_num_bytes) {
-        printf("\ttransmitting header %x\n", io.byte.bits);
+        // printf("\ttransmitting header %x\n", io.byte.bits);
         io.out.bits := io.byte.bits
         io.out.valid := io.byte.valid
         header_index := header_index + io.out.fire
       }.elsewhen(
         trap_addr_num_bytes > 0.U && trap_addr_index < trap_addr_num_bytes
       ) {
-        printf("\ttransmitting trap address %x\n", io.trap_addr.bits(trap_addr_index));
+        // printf("\ttransmitting trap address %x\n", io.trap_addr.bits(trap_addr_index));
         io.out.bits := io.trap_addr.bits(trap_addr_index)
         io.out.valid := io.trap_addr.valid
         trap_addr_index := trap_addr_index + io.out.fire
       }.elsewhen(
         target_addr_num_bytes > 0.U && target_addr_index < target_addr_num_bytes
       ) {
-        printf("\ttransmitting target address %x\n", io.target_addr.bits(target_addr_index));
+        // printf("\ttransmitting target address %x\n", io.target_addr.bits(target_addr_index));
         io.out.bits := io.target_addr.bits(target_addr_index)
         io.out.valid := io.target_addr.valid
         target_addr_index := target_addr_index + io.out.fire
       }.elsewhen(time_num_bytes > 0.U && time_index < time_num_bytes) {
-        printf("\ttransmitting time %x\n", io.time.bits(time_index));
+        // printf("\ttransmitting time %x\n", io.time.bits(time_index));
         io.out.bits := io.time.bits(time_index)
         io.out.valid := io.time.valid
         time_index := time_index + io.out.fire
@@ -504,7 +504,7 @@ class TacitEncoderModule(outer: TacitEncoder)
       .group(ingress_1_current_entry_next_insn_idx)
       .iaddr) >> 1.U
   )
-  printf("ingress 1 address: %x, next address: %x, target address: %x\n", ingress_1_queue.io.current_entry.group(ingress_1_msg_idx).iaddr, next_address, target_addr_msg)
+  // printf("ingress 1 address: %x, next address: %x, target address: %x\n", ingress_1_queue.io.current_entry.group(ingress_1_msg_idx).iaddr, next_address, target_addr_msg)
 
   val sent = RegInit(false.B)
   // reset takes priority over enqueue
@@ -610,7 +610,7 @@ class TacitEncoderModule(outer: TacitEncoder)
           is_compressed := bp_hit_count <= MAX_DELTA_TIME_COMP.U
           packet_valid := !sent && is_bp_mode
         }.elsewhen(bp_miss_flag && is_bp_mode) {
-          printf("bp mode is on, detected a not taken branch")
+          // printf("bp mode is on, detected a not taken branch")
           // encode miss packet
           header_byte := HeaderByte(
             FullHeaderType.FNotTakenBranch,
@@ -790,21 +790,21 @@ class TacitEncoderModule(outer: TacitEncoder)
 
             }
           }
-          printf(
-            "header byte set to %x for instruction at address %x. current time: %x, previous time: %x, delta time: %x\n",
-            header_byte,
-            ingress_1_queue.io.current_entry.group(ingress_1_msg_idx).iaddr,
-            ingress_1_queue.io.current_entry.time,
-            prev_time,
-            delta_time
-          )
+          // printf(
+          //   "header byte set to %x for instruction at address %x. current time: %x, previous time: %x, delta time: %x\n",
+          //   header_byte,
+          //   ingress_1_queue.io.current_entry.group(ingress_1_msg_idx).iaddr,
+          //   ingress_1_queue.io.current_entry.time,
+          //   prev_time,
+          //   delta_time
+          // )
           for (i <- 0 until outer.coreParams.nGroups) {
-            printf(
-              "\tentry: %x, idx: %x, instruction retired: %x\n",
-              ingress_1_queue.io.current_entry.group(i).iaddr,
-              i.asUInt,
-              ingress_1_queue.io.current_entry.group(i).iretire
-            )
+            // printf(
+            //   "\tentry: %x, idx: %x, instruction retired: %x\n",
+            //   ingress_1_queue.io.current_entry.group(i).iaddr,
+            //   i.asUInt,
+            //   ingress_1_queue.io.current_entry.group(i).iretire
+            // )
           }
         }
       }
