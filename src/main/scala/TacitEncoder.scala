@@ -258,7 +258,7 @@ class TacitEncoderModule(outer: TacitEncoder)
     .map(g => g.iretire === 1.U)
     .reduce(
       _ || _
-    ) && !ingress_1_queue.io.stall // check for a valid instruction packet
+    ) && !ingress_1_queue.io.stall // check for a valid instruction packet or queue
 
   ingress_1_queue.io.entry := 0.U.asTypeOf(
     new TraceCoreInterface(outer.coreParams)
@@ -397,7 +397,7 @@ class TacitEncoderModule(outer: TacitEncoder)
 
   val sent = RegInit(false.B)
   // reset takes priority over enqueue
-  when(pipeline_advance) {
+  when(pipeline_advance || (!byte_buffer.io.enq.fire && ingress_1_queue.io.current_entry_valid)) {
     sent := false.B
   }.elsewhen(byte_buffer.io.enq.fire) {
     sent := true.B
@@ -625,7 +625,7 @@ class TacitEncoderModule(outer: TacitEncoder)
           )
           is_compressed := delta_time <= MAX_DELTA_TIME_COMP.U
           packet_valid := !sent && is_bp_mode
-        }.elsewhen(ingress_1_has_message) {
+        } .elsewhen(ingress_1_has_message) {
           switch(
             ingress_1_queue.io.current_entry.group(ingress_1_msg_idx).itype
           ) {
@@ -807,7 +807,7 @@ class TacitEncoderModule(outer: TacitEncoder)
     }
   }
 
-  when(!ingress_1_has_message || ingress_1_valid_count === 1.U) {
+  when((!ingress_1_has_message || ingress_1_valid_count === 1.U) && ingress_1_queue.io.current_entry_valid) {
     ingress_1_queue.io.dequeue := true.B
   }
 }

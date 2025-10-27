@@ -26,6 +26,7 @@ class PacketQueue(val depth: Int, val coreParams: TraceCoreParams) extends Modul
   val io = IO(new PacketQueueIO(depth, coreParams))
 
   val queue = RegInit(VecInit(Seq.fill(depth)(0.U.asTypeOf(new TraceCoreInterface(coreParams)))))
+  // val queue = SyncReadMem(depth, new TraceCoreInterface(coreParams))
 
   val head = RegInit(0.U(log2Ceil(depth).W))
   val tail = RegInit(0.U(log2Ceil(depth).W))
@@ -51,28 +52,40 @@ class PacketQueue(val depth: Int, val coreParams: TraceCoreParams) extends Modul
 
   switch(Cat(do_enq, do_deq)) {
     is("b10".U) { // enqueue only
-      queue(tail) := io.entry
-      tail := Mux(tail === (depth - 1).U, 0.U, tail + 1.U)
-      count := count + 1.U
+      when (count < depth.U){
+        queue(tail) := io.entry
+        tail := Mux(tail === (depth - 1).U, 0.U, tail + 1.U)
+        count := count + 1.U
+      }
     }
     is("b01".U) { // dequeue only
-      head := Mux(head === (depth - 1).U, 0.U, head + 1.U)
-      count := count - 1.U
+      when (count > 0.U) {
+        queue(head) := 0.U.asTypeOf(new TraceCoreInterface(coreParams))
+        head := Mux(head === (depth - 1).U, 0.U, head + 1.U)
+        count := count - 1.U
+      }
     }
     is("b11".U) { // simultaneous enqueue & dequeue
-      queue(tail) := io.entry
-      tail := Mux(tail === (depth - 1).U, 0.U, tail + 1.U)
-      head := Mux(head === (depth - 1).U, 0.U, head + 1.U)
-      // count stays the same
+      when (count > 0.U) {
+        queue(tail) := io.entry
+        tail := Mux(tail === (depth - 1).U, 0.U, tail + 1.U)
+        head := Mux(head === (depth - 1).U, 0.U, head + 1.U)
+      } .otherwise {
+        queue(tail) := io.entry
+        tail := Mux(tail === (depth - 1).U, 0.U, tail + 1.U)
+        count := count + 1.U
+      }
+      
     }
   }
 
   // selective invalidation of one instruction within current entry
-  when(io.invalidate_current_entry_insn) {
-    val modified_entry = WireInit(current_entry)
+  when(io.invalidate_current_entry_insn && !io.dequeue) {
+    val modified_entry = WireInit(queue(head))
     modified_entry.group(io.invalidate_current_entry_idx).iretire := 0.U
     queue(head) := modified_entry
   }
+  
   
   printf("number of packets in queue: %x\n", count)
 
