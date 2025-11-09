@@ -224,7 +224,9 @@ class TacitEncoderModule(outer: TacitEncoder)
 
   val MAX_DELTA_TIME_COMP = 0x3f // 63, 6 bits
   def stallThreshold(count: UInt) =
-    count >= (outer.bufferDepth - outer.coreStages).U
+    count >= outer.bufferDepth.U - outer.coreStages.U
+  
+  printf("buffer depth: %x\n", outer.bufferDepth.U);
 
   // mode of operation
   // 0: branch target only
@@ -258,7 +260,7 @@ class TacitEncoderModule(outer: TacitEncoder)
     .map(g => g.iretire === 1.U)
     .reduce(
       _ || _
-    ) && !ingress_1_queue.io.stall // check for a valid instruction packet or queue
+    ) && !ingress_1_queue.io.stall && !stall // check for a valid instruction packet or queue
 
   ingress_1_queue.io.entry := 0.U.asTypeOf(
     new TraceCoreInterface(outer.coreParams)
@@ -266,7 +268,7 @@ class TacitEncoderModule(outer: TacitEncoder)
   ingress_1_queue.io.entry_valid := false.B
   ingress_1_queue.io.dequeue := false.B
 
-  when(pipeline_advance) {
+  when(pipeline_advance && io.control.enable) {
     ingress_0 := io.in
     ingress_1_queue.io.entry := ingress_0
     ingress_1_queue.io.entry_valid := true.B
