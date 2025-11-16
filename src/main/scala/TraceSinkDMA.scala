@@ -17,10 +17,11 @@ import boom.v3.common.{BoomTile, BoomTileAttachParams}
 
 case class TraceSinkDMAParams(
   regNodeBaseAddr: BigInt,
-  beatBytes: Int
+  beatBytes: Int,
+  inBytes: Int
 )
 
-class TraceSinkDMA(params: TraceSinkDMAParams)(implicit p: Parameters) extends LazyTraceSink {
+class TraceSinkDMA(val params: TraceSinkDMAParams)(implicit p: Parameters) extends LazyTraceSink(params.inBytes) {
   val node = TLClientNode(Seq(TLMasterPortParameters.v1(Seq(TLClientParameters(
     name = "trace-sink-dma", sourceId = IdRange(0, 1))))))
 
@@ -31,10 +32,14 @@ class TraceSinkDMA(params: TraceSinkDMAParams)(implicit p: Parameters) extends L
     beatBytes = params.beatBytes
   )
 
-  lazy val module = new TraceSinkDMAImpl(this)
-  class TraceSinkDMAImpl(outer: TraceSinkDMA) extends LazyTraceSinkModuleImp(outer) {
-    val fifo = Module(new Queue(UInt(8.W), 32))
+  override lazy val module = new TraceSinkDMAImpl(this)
+  
+  class TraceSinkDMAImpl(outer: TraceSinkDMA) extends LazyTraceSinkModuleImp(outer.params.inBytes, outer) {
+    val fifo = Module(new Queue(UInt((outer.params.inBytes * 8).W), 32))
+    val mask_fifo = Module(new Queue(UInt(outer.params.inBytes.W), 32))
     fifo.io.enq <> io.trace_in
+    mask_fifo.io.enq <> io.trace_valid_mask
+
     val (mem, edge) = outer.node.out(0)
     val addrBits = edge.bundle.addressBits
     val busWidth = edge.bundle.dataBits
@@ -62,6 +67,7 @@ class TraceSinkDMA(params: TraceSinkDMAParams)(implicit p: Parameters) extends L
     mem.a.valid := mstate === mWrite
     mem.d.ready := mstate === mResp
     fifo.io.deq.ready := false.B // default case 
+    mask_fifo.io.deq.ready := false.B
     dontTouch(mem.d.valid)
 
     // mask according to collect_counter
@@ -77,27 +83,50 @@ class TraceSinkDMA(params: TraceSinkDMAParams)(implicit p: Parameters) extends L
 
     mem.a.bits := put_req
 
+    val current_packet = RegInit(0.U((outer.params.inBytes * 8).W))
+    val current_mask = RegInit(0.U((outer.params.inBytes).W))
+    
+
     switch(mstate) {
       is (mIdle) {
         fifo.io.deq.ready := false.B
+        mask_fifo.io.deq.ready := false.B
         mstate := Mux(fifo.io.deq.valid, mCollect, mIdle)
         collect_counter := 0.U
+
+        current_packet := fifo.io.deq.bits
+        current_mask := mask_fifo.io.deq.bits
       }
       is (mCollect) {
-        // either we have collected enough data or that's all the messages for now
-        mstate := Mux(collect_advance, mWrite, mCollect)
-        collect_counter := Mux(fifo.io.deq.fire, collect_counter + 1.U, collect_counter)
-        msg_buffer(collect_counter) := Mux(fifo.io.deq.fire, fifo.io.deq.bits, msg_buffer(collect_counter))
-        fifo.io.deq.ready := collect_counter < (busWidth / 8).U
+        mstate := Mux(current_mask.orR, mWrite, mCollect)
+
+        // multi-byte msg_buffer write
+        val valid_count = PopCount(current_mask)
+        val space_left = (busWidth/8).U - collect_counter
+        val write_count = Mux(valid_count < space_left, valid_count, space_left)
+
+        for (i <- 0 until outer.params.inBytes) {
+          when(current_mask(i) && (i.U < write_count)) {
+            msg_buffer(collect_counter) := current_packet(8*i+7, 8*i)
+            collect_counter := collect_counter + 1.U
+            current_mask := current_mask & ~(1.U << i)
+          }
+        }
+
+        // fifo ready if packet has been processed
+        fifo.io.deq.ready := ~current_mask.orR
+        mask_fifo.io.deq.ready := ~current_mask.orR 
       }
       // potentially, optimize this by pipelining collect and write
       is (mWrite) {
         // we need to write the collected data to the memory
         fifo.io.deq.ready := false.B
+        mask_fifo.io.deq.ready := false.B
         mstate := Mux(mem.a.fire, mResp, mWrite)
       }
       is (mResp) {
         fifo.io.deq.ready := false.B
+        mask_fifo.io.deq.ready := false.B
         mstate := Mux(mem.d.fire, mIdle, mResp)
         addr_counter := Mux(mem.d.fire, addr_counter + collect_counter, addr_counter)
       }
@@ -147,7 +176,8 @@ class WithTraceSinkDMA(targetId: Int = 1) extends Config((site, here, up) => {
           tp.tileParams.traceParams.get.buildSinks :+ (p => 
             (LazyModule(new TraceSinkDMA(TraceSinkDMAParams(
             regNodeBaseAddr = 0x3010000 + tp.tileParams.tileId * 0x1000,
-            beatBytes = xBytes
+            beatBytes = xBytes,
+            inBytes = 1
         ))(p)), targetId)))))
       )
     }
@@ -158,7 +188,8 @@ class WithTraceSinkDMA(targetId: Int = 1) extends Config((site, here, up) => {
           tp.tileParams.traceParams.get.buildSinks :+ (p => 
             (LazyModule(new TraceSinkDMA(TraceSinkDMAParams(
             regNodeBaseAddr = 0x3010000 + tp.tileParams.tileId * 0x1000,
-            beatBytes = xBytes
+            beatBytes = xBytes,
+            inBytes = 1
         ))(p)), targetId)))))
       )
     }
@@ -169,7 +200,8 @@ class WithTraceSinkDMA(targetId: Int = 1) extends Config((site, here, up) => {
           tp.tileParams.traceParams.get.buildSinks :+ (p => 
             (LazyModule(new TraceSinkDMA(TraceSinkDMAParams(
             regNodeBaseAddr = 0x3010000 + tp.tileParams.tileId * 0x1000,
-            beatBytes = xBytes
+            beatBytes = xBytes,
+            inBytes = 31
         ))(p)), targetId)))))
       )
     }

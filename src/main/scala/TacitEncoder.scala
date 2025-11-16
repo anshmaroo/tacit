@@ -91,7 +91,8 @@ class TracePacketizer(val coreParams: TraceCoreParams) extends Module {
     val time = Flipped(Decoupled(Vec(timeMaxNumBytes, UInt(8.W))))
     val byte = Flipped(Decoupled(UInt(8.W)))
     val metadata = Flipped(Decoupled(UInt(metaDataWidth.W)))
-    val out = Decoupled(UInt(8.W))
+    val out = Decoupled(UInt(((addrMaxNumBytes * 2 + timeMaxNumBytes + 1) * 8).W))
+    val out_valid_mask = Decoupled(UInt(((addrMaxNumBytes * 2 + timeMaxNumBytes + 1)).W))
   })
 
   val pIdle :: pComp :: pFull :: Nil = Enum(3)
@@ -126,7 +127,40 @@ class TracePacketizer(val coreParams: TraceCoreParams) extends Module {
   io.time.ready := false.B
   io.byte.ready := false.B
   io.out.bits := 0.U
+  io.out_valid_mask.bits := 0.U
+  io.out_valid_mask.valid := false.B
 
+  val full_packet = Wire(UInt(((addrMaxNumBytes * 2 + timeMaxNumBytes + 1) * 8).W))
+  val full_packet_mask = RegInit(0.U((addrMaxNumBytes * 2 + timeMaxNumBytes + 1).W))
+
+  val headerField    = io.byte.bits
+  val trapField      = io.trap_addr.bits.asUInt
+  val targetField    = io.target_addr.bits.asUInt
+  val timeField      = io.time.bits.asUInt
+
+  full_packet := Cat(
+    timeField,          
+    targetField,
+    trapField,
+    headerField         
+  )
+
+  val header_mask = 1.U(1.W)
+  val trap_mask = Wire(UInt(addrMaxNumBytes.W))
+  val target_mask = Wire(UInt(addrMaxNumBytes.W))
+  val time_mask = Wire(UInt(timeMaxNumBytes.W))
+
+  trap_mask := ((1.U << trap_addr_metadata) - 1.U)(addrMaxNumBytes - 1, 0)
+  target_mask := ((1.U << target_addr_metadata) - 1.U)(addrMaxNumBytes - 1, 0)
+  time_mask := ((1.U << time_metadata) - 1.U)(timeMaxNumBytes - 1, 0)
+
+  dontTouch(trap_mask)
+  dontTouch(target_mask)
+  dontTouch(time_mask)
+
+  val concatenated = Cat(time_mask, target_mask, trap_mask, 1.U(1.W)) 
+  dontTouch(concatenated)
+  full_packet_mask := concatenated
   def prep_next_state(): Unit = {
     trap_addr_index := 0.U
     trap_addr_num_bytes := Mux(io.metadata.fire, trap_addr_metadata, 0.U)
@@ -158,8 +192,13 @@ class TracePacketizer(val coreParams: TraceCoreParams) extends Module {
       // transmit a byte from byte buffer
       // printf("\ttransmitting byte %x from byte buffer\n", io.byte.bits);
       io.byte.ready := io.out.ready
+
       io.out.valid := io.byte.valid
       io.out.bits := io.byte.bits
+
+      io.out_valid_mask.valid := io.byte.valid
+      io.out_valid_mask.bits := 1.U
+
       when(io.byte.fire) {
         // metadata runs ahead by 1 cycle for performance optimization
         io.metadata.ready := true.B
@@ -169,39 +208,21 @@ class TracePacketizer(val coreParams: TraceCoreParams) extends Module {
     is(pFull) {
       // header, addr, time
       io.out.valid := true.B
-      when(header_num_bytes > 0.U && header_index < header_num_bytes) {
-        // printf("\ttransmitting header %x\n", io.byte.bits);
-        io.out.bits := io.byte.bits
-        io.out.valid := io.byte.valid
-        header_index := header_index + io.out.fire
-      }.elsewhen(
-        trap_addr_num_bytes > 0.U && trap_addr_index < trap_addr_num_bytes
-      ) {
-        // printf("\ttransmitting trap address %x\n", io.trap_addr.bits(trap_addr_index));
-        io.out.bits := io.trap_addr.bits(trap_addr_index)
-        io.out.valid := io.trap_addr.valid
-        trap_addr_index := trap_addr_index + io.out.fire
-      }.elsewhen(
-        target_addr_num_bytes > 0.U && target_addr_index < target_addr_num_bytes
-      ) {
-        // printf("\ttransmitting target address %x\n", io.target_addr.bits(target_addr_index));
-        io.out.bits := io.target_addr.bits(target_addr_index)
-        io.out.valid := io.target_addr.valid
-        target_addr_index := target_addr_index + io.out.fire
-      }.elsewhen(time_num_bytes > 0.U && time_index < time_num_bytes) {
-        // printf("\ttransmitting time %x\n", io.time.bits(time_index));
-        io.out.bits := io.time.bits(time_index)
-        io.out.valid := io.time.valid
-        time_index := time_index + io.out.fire
-      }.otherwise {
+      io.out_valid_mask.valid := true.B
+      when(PopCount(full_packet_mask) > 0.U) {
+        io.out.bits := full_packet
+        io.out_valid_mask.bits := full_packet_mask
+        full_packet_mask := 0.U
+      } .otherwise {
         // FIXME: delay for 1 cycle
         io.out.valid := false.B
+        io.out_valid_mask.valid := false.B
         // release buffers
         io.byte.ready := true.B
         // if we ever have a packet, we need to be ready to accept it
-        io.target_addr.ready := target_addr_num_bytes =/= 0.U
-        io.trap_addr.ready := trap_addr_num_bytes =/= 0.U
-        io.time.ready := time_num_bytes =/= 0.U
+        io.target_addr.ready := true.B
+        io.trap_addr.ready := true.B
+        io.time.ready := true.B
         io.metadata.ready := true.B
         prep_next_state()
       }
@@ -213,14 +234,16 @@ class TacitEncoder(
     override val coreParams: TraceCoreParams,
     val bufferDepth: Int,
     val coreStages: Int,
-    val bpParams: TacitBPParams
+    val bpParams: TacitBPParams,
+    val outBytes: Int
 )(implicit p: Parameters)
-    extends LazyTraceEncoder(coreParams)(p) {
+    extends LazyTraceEncoder(outBytes, coreParams)(p) { 
   override lazy val module = new TacitEncoderModule(this)
 }
 
 class TacitEncoderModule(outer: TacitEncoder)
     extends LazyTraceEncoderModule(outer) {
+ 
 
   val MAX_DELTA_TIME_COMP = 0x3f // 63, 6 bits
   def stallThreshold(count: UInt) =
@@ -230,7 +253,7 @@ class TacitEncoderModule(outer: TacitEncoder)
 
   // mode of operation
   // 0: branch target only
-  // 1: branch prediction and skip jump
+  // 1: branch prediction and skip jum
   // 2: branch prediction and don't skip jump
 
   def is_bt_mode = io.control.bp_mode === 0.U
@@ -358,6 +381,7 @@ class TacitEncoderModule(outer: TacitEncoder)
   trace_packetizer.io.byte <> byte_buffer.io.deq
   trace_packetizer.io.metadata <> metadata_buffer.io.deq
   trace_packetizer.io.out <> io.out
+  trace_packetizer.io.out_valid_mask <> io.out_valid_mask
 
   // intermediate encoder control signals
   val encode_trap_addr_valid = Wire(Bool())
@@ -397,8 +421,8 @@ class TacitEncoderModule(outer: TacitEncoder)
     byte_buffer.io.count
   )
   dontTouch(stall)
-  io.stall := stall | ingress_1_queue.io.stall
-
+  io.stall := (stall | ingress_1_queue.io.stall)
+  dontTouch(io.stall)
   trap_addr_encoder.io.input_valid := encode_trap_addr_valid && !is_compressed && packet_valid
   target_addr_encoder.io.input_valid := encode_target_addr_valid && !is_compressed && packet_valid
   time_encoder.io.input_valid := !is_compressed && packet_valid

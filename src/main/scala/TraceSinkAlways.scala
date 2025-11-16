@@ -12,9 +12,9 @@ import boom.v3.common.BoomTileAttachParams
 
 import freechips.rocketchip.trace._
 
-class TraceSinkAlways()(implicit p: Parameters) extends LazyTraceSink {
+class TraceSinkAlways(val inBytes: Int = 1)(implicit p: Parameters) extends LazyTraceSink(inBytes) {
   override lazy val module = new TraceSinkAlwaysImpl(this)
-  class TraceSinkAlwaysImpl(outer: TraceSinkAlways) extends LazyTraceSinkModuleImp(outer) {
+  class TraceSinkAlwaysImpl(outer: TraceSinkAlways) extends LazyTraceSinkModuleImp(outer.inBytes, outer) {
     io.trace_in.ready := true.B
   }
 }

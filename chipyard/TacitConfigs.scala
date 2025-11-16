@@ -24,7 +24,7 @@ class WithTacitEncoder extends Config((site, here, up) => {
         bufferDepth = 16,
         coreStages = 5,
         bpParams = TacitBPParams(xlen = tp.tileParams.core.xLen, n_entries = 1024))(p)),
-        useArbiterMonitor = false
+        useArbiterMonitor = false,
       )),
       core = tp.tileParams.core.copy(enableTraceCoreIngress = true)))
     case tp: ShuttleTileAttachParams => tp.copy(tileParams = tp.tileParams.copy(
@@ -37,8 +37,8 @@ class WithTacitEncoder extends Config((site, here, up) => {
         ),
         bufferDepth = 16,
         coreStages = 7,
-        bpParams = TacitBPParams(xlen = tp.tileParams.core.xLen, n_entries = 1024))(p)),
-        useArbiterMonitor = false
+        pParams = TacitBPParams(xlen = tp.tileParams.core.xLen, n_entries = 1024))(p)),
+        useArbiterMonitor = false,
       )),
       core = tp.tileParams.core.copy(enableTraceCoreIngress = true)))
   }

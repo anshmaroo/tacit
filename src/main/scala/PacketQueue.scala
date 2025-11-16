@@ -35,8 +35,9 @@ class PacketQueue(val depth: Int, val coreParams: TraceCoreParams) extends Modul
   io.count := count
 
   val full = count === depth.U
+  val almost_full = count >= depth.U - 7.U // constant core stages, bad practice but fix later
   val empty = count === 0.U
-  io.stall := full
+  io.stall := almost_full
 
   val current_entry = queue(head)
   val next_head = Mux(head === (depth.U - 1.U), 0.U, head + 1.U)
