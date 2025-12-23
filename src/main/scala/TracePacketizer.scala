@@ -8,12 +8,15 @@ import freechips.rocketchip.trace.TraceCoreParams
 class TracePacketizer(val coreParams: TraceCoreParams) extends Module with MetaDataWidthHelper {
 
   val io = IO(new Bundle {
-    val target_addr = Flipped(Decoupled(Vec(addrMaxNumBytes, UInt(8.W))))
-    val trap_addr = Flipped(Decoupled(Vec(addrMaxNumBytes, UInt(8.W))))
-    val time = Flipped(Decoupled(Vec(timeMaxNumBytes, UInt(8.W))))
+    // val target_addr = Flipped(Decoupled(Vec(addrMaxNumBytes, UInt(8.W))))
+    // val trap_addr = Flipped(Decoupled(Vec(addrMaxNumBytes, UInt(8.W))))
+    // val time = Flipped(Decoupled(Vec(timeMaxNumBytes, UInt(8.W))))
+    // val prv = Flipped(Decoupled(UInt(8.W)))
+    // val ctx = Flipped(Decoupled(Vec(ctxMaxNumBytes, UInt(8.W))))
+
+    val message = Flipped(Decoupled(new MessageBundle(coreParams)))
+
     val byte = Flipped(Decoupled(UInt(8.W)))
-    val prv = Flipped(Decoupled(UInt(8.W)))
-    val ctx = Flipped(Decoupled(Vec(ctxMaxNumBytes, UInt(8.W))))
     val metadata = Flipped(Decoupled(new MetaDataBundle(coreParams)))
     val out = Decoupled(UInt(8.W))
   })
@@ -37,11 +40,7 @@ class TracePacketizer(val coreParams: TraceCoreParams) extends Module with MetaD
   // default values
   io.out.valid := false.B
   io.metadata.ready := false.B
-  io.target_addr.ready := false.B
-  io.trap_addr.ready := false.B
-  io.time.ready := false.B
-  io.prv.ready := false.B
-  io.ctx.ready := false.B
+  io.message.ready := false.B
   io.byte.ready := false.B
   io.out.bits := 0.U
 
@@ -100,24 +99,24 @@ class TracePacketizer(val coreParams: TraceCoreParams) extends Module with MetaD
         io.out.valid := io.byte.valid
         header_index := header_index + io.out.fire
       } .elsewhen (prv_num_bytes > 0.U && prv_index < prv_num_bytes) {
-        io.out.bits := io.prv.bits
-        io.out.valid := io.prv.valid
+        io.out.bits := io.message.bits.prv_encoder_output_byte
+        io.out.valid := true.B
         prv_index := prv_index + io.out.fire
       } .elsewhen (ctx_num_bytes > 0.U && ctx_index < ctx_num_bytes) {
-        io.out.bits := io.ctx.bits(ctx_index)
-        io.out.valid := io.ctx.valid
+        io.out.bits := io.message.bits.ctx_encoder_output_bytes(ctx_index)
+        io.out.valid := true.B
         ctx_index := ctx_index + io.out.fire
       } .elsewhen (trap_addr_num_bytes > 0.U && trap_addr_index < trap_addr_num_bytes) {
-        io.out.bits := io.trap_addr.bits(trap_addr_index)
-        io.out.valid := io.trap_addr.valid
+        io.out.bits := io.message.bits.trap_addr_encoder_output_bytes(trap_addr_index)
+        io.out.valid := true.B
         trap_addr_index := trap_addr_index + io.out.fire
       } .elsewhen (target_addr_num_bytes > 0.U && target_addr_index < target_addr_num_bytes) {
-        io.out.bits := io.target_addr.bits(target_addr_index)
-        io.out.valid := io.target_addr.valid
+        io.out.bits := io.message.bits.target_addr_encoder_output_bytes(target_addr_index)
+        io.out.valid := true.B
         target_addr_index := target_addr_index + io.out.fire
       } .elsewhen (time_num_bytes > 0.U && time_index < time_num_bytes) {
-        io.out.bits := io.time.bits(time_index)
-        io.out.valid := io.time.valid
+        io.out.bits := io.message.bits.time_encoder_output_bytes(time_index)
+        io.out.valid := true.B
         time_index := time_index + io.out.fire
       } .otherwise {
         // FIXME: delay for 1 cycle
@@ -125,11 +124,7 @@ class TracePacketizer(val coreParams: TraceCoreParams) extends Module with MetaD
         // release buffers
         io.byte.ready := true.B
         // conditional depletion of buffers, based on whether we included it in the packet
-        io.target_addr.ready := target_addr_num_bytes =/= 0.U
-        io.trap_addr.ready := trap_addr_num_bytes =/= 0.U
-        io.time.ready := time_num_bytes =/= 0.U
-        io.prv.ready := prv_num_bytes =/= 0.U
-        io.ctx.ready := ctx_num_bytes =/= 0.U
+        io.message.ready := time_num_bytes =/= 0.U
         io.metadata.ready := true.B
         prep_next_state()
       }

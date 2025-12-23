@@ -146,15 +146,10 @@ class TacitEncoderModule(outer: TacitEncoder) extends LazyTraceEncoderModule(out
   val ctx_encoder_max_num_bytes = maxASIdBits / (8 - 1) + 1
 
   val metadataWidth = log2Ceil(trap_addr_encoder_max_num_bytes) + log2Ceil(target_addr_encoder_max_num_bytes) + log2Ceil(time_encoder_max_num_bytes) + 1
+  val message_encoder = Module(new MessageEncoder(coreParams))
 
-  val message_encoder = Module(new MessageEncoder(coreParams, maxASIdBits))
-
-  // queue buffers
-  val trap_addr_buffer = Module(new Queue(Vec(trap_addr_encoder_max_num_bytes, UInt(8.W)), outer.bufferDepth))
-  val target_addr_buffer = Module(new Queue(Vec(target_addr_encoder_max_num_bytes, UInt(8.W)), outer.bufferDepth))
-  val time_buffer = Module(new Queue(Vec(time_encoder_max_num_bytes, UInt(8.W)), outer.bufferDepth))
-  val prv_buffer = Module(new Queue(UInt(8.W), outer.bufferDepth)) 
-  val ctx_buffer = Module(new Queue(Vec(ctx_encoder_max_num_bytes, UInt(8.W)), outer.bufferDepth))
+  // buffers
+  val message_buffer = Module(new Queue(new MessageBundle(coreParams), outer.bufferDepth))
   val byte_buffer = Module(new Queue(UInt(8.W), outer.bufferDepth)) // buffer compressed packet or full header
   val metadata_buffer = Module(new Queue(new MetaDataBundle(coreParams), outer.bufferDepth))
   
@@ -185,20 +180,10 @@ class TacitEncoderModule(outer: TacitEncoder) extends LazyTraceEncoderModule(out
 
   // packetization of buffered message
   val trace_packetizer = Module(new TracePacketizer(coreParams))
-  trace_packetizer.io.target_addr <> target_addr_buffer.io.deq
-  trace_packetizer.io.trap_addr <> trap_addr_buffer.io.deq
-  trace_packetizer.io.time <> time_buffer.io.deq
-  trace_packetizer.io.byte <> byte_buffer.io.deq
+  trace_packetizer.io.message <> message_buffer.io.deq
   trace_packetizer.io.metadata <> metadata_buffer.io.deq
-  trace_packetizer.io.prv <> prv_buffer.io.deq
-  trace_packetizer.io.ctx <> ctx_buffer.io.deq
+  trace_packetizer.io.byte <> byte_buffer.io.deq
   trace_packetizer.io.out <> io.out
-
-  // intermediate encoder control signals
-  val encode_trap_addr_valid = Wire(Bool())
-  val encode_target_addr_valid = Wire(Bool())
-  val encode_prv_valid = Wire(Bool())
-  val encode_ctx_valid = Wire(Bool())
 
   // metadata packing
   val metadata = Wire(new MetaDataBundle(coreParams))
@@ -216,25 +201,14 @@ class TacitEncoderModule(outer: TacitEncoder) extends LazyTraceEncoderModule(out
                                   Mux(bp_flush_hit, bp_hit_packet, comp_packet),
                                   header_byte)
   byte_buffer.io.enq.valid := packet_valid
-  // trap address buffering
-  trap_addr_buffer.io.enq.bits := message_encoder.io.trap_addr_encoder_output_bytes
-  trap_addr_buffer.io.enq.valid := !is_compressed && packet_valid && message_encoder.io.fields.has_trap
-  // target address buffering
-  target_addr_buffer.io.enq.bits := message_encoder.io.target_addr_encoder_output_bytes
-  target_addr_buffer.io.enq.valid := !is_compressed && packet_valid && message_encoder.io.fields.has_target
-  // time buffering
-  time_buffer.io.enq.bits := message_encoder.io.time_encoder_output_bytes
-  time_buffer.io.enq.valid := !is_compressed && packet_valid
-  // prv buffering
-  prv_buffer.io.enq.bits := message_encoder.io.prv_encoder_output_byte
-  prv_buffer.io.enq.valid := !is_compressed && packet_valid && message_encoder.io.fields.has_prv
-  // context buffering
-  ctx_buffer.io.enq.bits := message_encoder.io.ctx_encoder_output_bytes
-  ctx_buffer.io.enq.valid := !is_compressed && packet_valid && message_encoder.io.fields.has_ctx
+
+  /* message buffering (replaces separated buffers) */
+  message_buffer.io.enq.bits := message_encoder.io.message
+  message_buffer.io.enq.valid := !is_compressed && packet_valid
 
   // stall if any buffer is almost full 
   // technically it should always the byte buffer, but just to be safe
-  stall := stallThreshold(trap_addr_buffer.io.count) || stallThreshold(target_addr_buffer.io.count) || stallThreshold(time_buffer.io.count) || stallThreshold(byte_buffer.io.count)
+  stall := stallThreshold(message_buffer.io.count) // || stallThreshold(target_addr_buffer.io.count) || stallThreshold(time_buffer.io.count) || stallThreshold(byte_buffer.io.count)
   io.stall := stall
   
   val sent = RegInit(false.B)
@@ -245,16 +219,6 @@ class TacitEncoderModule(outer: TacitEncoder) extends LazyTraceEncoderModule(out
     sent := true.B
   }
 
-  // trap_addr_encoder.io.input_valid := encode_trap_addr_valid && !is_compressed && packet_valid
-  // target_addr_encoder.io.input_valid := encode_target_addr_valid && !is_compressed && packet_valid
-  // prv_encoder.io.input_valid := encode_prv_valid && !is_compressed && packet_valid
-  // ctx_encoder.io.input_valid := encode_ctx_valid && !is_compressed && packet_valid
-  // time_encoder.io.input_valid := !is_compressed && packet_valid
-  
-  // message_encoder.io.encode_trap_addr_valid := encode_trap_addr_valid
-  // message_encoder.io.encode_target_addr_valid := encode_target_addr_valid
-  // message_encoder.io.encode_prv_valid := encode_prv_valid
-  // message_encoder.io.encode_ctx_valid := encode_ctx_valid
   message_encoder.io.is_compressed := is_compressed
   message_encoder.io.packet_valid := packet_valid
 
@@ -305,10 +269,6 @@ class TacitEncoderModule(outer: TacitEncoder) extends LazyTraceEncoderModule(out
   packet_valid := false.B
   message_encoder.io.is_compressed := is_compressed
   message_encoder.io.packet_valid := packet_valid
-  encode_target_addr_valid := false.B
-  encode_trap_addr_valid := false.B
-  encode_prv_valid := false.B
-  encode_ctx_valid := false.B
 
   val message_type = Wire(MessageType())
   message_type := MessageType.Branch
@@ -331,20 +291,16 @@ class TacitEncoderModule(outer: TacitEncoder) extends LazyTraceEncoderModule(out
       prev_time := ingress_0.time
       // target address
       message_encoder.io.target_addr_encoder_input := ingress_0.group(0).iaddr >> 1.U // last bit is always 0
-      encode_target_addr_valid := true.B
       // prv
       message_encoder.io.prv_encoder_from_priv_input := 0b00.U
       message_encoder.io.prv_encoder_to_priv_input := ingress_0.priv
-      encode_prv_valid := true.B
       // reuse trap address for runtime_cfg
       val runtime_cfg = Wire(UInt(7.W))
       // 2 bits for bp mode, 6 bits for n_entries
       runtime_cfg := Cat(log2Ceil(outer.bpParams.n_entries/64).U, io.control.bp_mode(1,0))
       message_encoder.io.trap_addr_encoder_input := runtime_cfg
-      encode_trap_addr_valid := sync_type === SyncType.SyncStart
       // context
       message_encoder.io.ctx_encoder_input := ingress_0.ctx
-      encode_ctx_valid := true.B
       is_compressed := false.B
       packet_valid := !sent
       // state transition: wait for message to go in
@@ -426,7 +382,6 @@ class TacitEncoderModule(outer: TacitEncoder) extends LazyTraceEncoderModule(out
               message_encoder.io.time_encoder_input := delta_time 
               prev_time := Mux(byte_buffer.io.enq.fire, ingress_1.time, prev_time)
               message_encoder.io.target_addr_encoder_input := target_addr_msg
-              encode_target_addr_valid := true.B
               is_compressed := false.B
               packet_valid := !sent
               message_type := MessageType.UninfJump
@@ -437,12 +392,9 @@ class TacitEncoderModule(outer: TacitEncoder) extends LazyTraceEncoderModule(out
               message_encoder.io.time_encoder_input := delta_time
               prev_time := Mux(byte_buffer.io.enq.fire, ingress_1.time, prev_time)
               message_encoder.io.target_addr_encoder_input := target_addr_msg
-              encode_target_addr_valid := true.B
               message_encoder.io.trap_addr_encoder_input := ingress_1.group(ingress_1_msg_idx).iaddr >> 1.U
-              encode_trap_addr_valid := true.B
               message_encoder.io.prv_encoder_from_priv_input := ingress_1.priv
               message_encoder.io.prv_encoder_to_priv_input := ingress_0.priv
-              encode_prv_valid := true.B
               is_compressed := false.B
               packet_valid := !sent
               message_type := MessageType.Trap
@@ -453,12 +405,9 @@ class TacitEncoderModule(outer: TacitEncoder) extends LazyTraceEncoderModule(out
               message_encoder.io.time_encoder_input := delta_time
               prev_time := Mux(byte_buffer.io.enq.fire, ingress_1.time, prev_time)
               message_encoder.io.target_addr_encoder_input := target_addr_msg
-              encode_target_addr_valid := true.B
               message_encoder.io.trap_addr_encoder_input := ingress_1.group(ingress_1_msg_idx).iaddr >> 1.U
-              encode_trap_addr_valid := true.B
               message_encoder.io.prv_encoder_from_priv_input := ingress_1.priv
               message_encoder.io.prv_encoder_to_priv_input := ingress_0.priv
-              encode_prv_valid := true.B
               is_compressed := false.B
               packet_valid := !sent
               message_type := MessageType.Trap
@@ -469,14 +418,10 @@ class TacitEncoderModule(outer: TacitEncoder) extends LazyTraceEncoderModule(out
               message_encoder.io.time_encoder_input := delta_time
               prev_time := Mux(byte_buffer.io.enq.fire, ingress_1.time, prev_time)
               message_encoder.io.target_addr_encoder_input := target_addr_msg
-              encode_target_addr_valid := true.B
               message_encoder.io.trap_addr_encoder_input := ingress_1.group(ingress_1_msg_idx).iaddr >> 1.U
-              encode_trap_addr_valid := true.B
               message_encoder.io.prv_encoder_from_priv_input := ingress_1.priv
               message_encoder.io.prv_encoder_to_priv_input := ingress_0.priv
-              encode_prv_valid := true.B
               message_encoder.io.ctx_encoder_input := ingress_1.ctx
-              encode_ctx_valid := ingress_0.priv === 0.U // encode ctx if returning to user mode
               is_compressed := false.B
               packet_valid := !sent
               message_type := MessageType.Return

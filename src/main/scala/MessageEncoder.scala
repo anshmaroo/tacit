@@ -11,7 +11,18 @@ class MessageFields extends Bundle {
   val has_ctx    = Bool()
 }
 
-class MessageEncoder(val coreParams: TraceCoreParams, val maxASIdBits: Int) extends Module {
+class MessageBundle(val coreParams: TraceCoreParams) extends Bundle with MetaDataWidthHelper {
+    // outputs
+    val maxNumBytes = coreParams.iaddrWidth/(8-1) + 1
+    val trap_addr_encoder_output_bytes = Vec(maxNumBytes, UInt(8.W))
+    val target_addr_encoder_output_bytes = Vec(maxNumBytes, UInt(8.W))
+    val time_encoder_output_bytes = Vec(maxNumBytes, UInt(8.W))
+    val prv_encoder_output_byte = UInt(8.W)
+    val ctx_encoder_output_bytes = Vec(ctxMaxNumBytes, UInt(8.W))
+}   
+
+class MessageEncoder(val coreParams: TraceCoreParams) extends Module with MetaDataWidthHelper {
+    val maxNumBytes = coreParams.iaddrWidth/(8-1) + 1
     val io = IO(new Bundle {
         // valid bits
         // val encode_trap_addr_valid = Input(Bool())
@@ -30,20 +41,12 @@ class MessageEncoder(val coreParams: TraceCoreParams, val maxASIdBits: Int) exte
         val prv_encoder_to_priv_input = Input(UInt(3.W))
         val ctx_encoder_input = Input(UInt(maxASIdBits.W))
 
-        // outputs
-        val maxNumBytes = coreParams.iaddrWidth/(8-1) + 1
-
+        val message = Output(new MessageBundle(coreParams))
         val trap_addr_encoder_output_num_bytes = Output(UInt(log2Ceil(maxNumBytes).W))
-        val trap_addr_encoder_output_bytes = Output(Vec(maxNumBytes, UInt(8.W)))
         val target_addr_encoder_output_num_bytes = Output(UInt(log2Ceil(maxNumBytes).W))
-        val target_addr_encoder_output_bytes = Output(Vec(maxNumBytes, UInt(8.W)))
         val time_encoder_output_num_bytes = Output(UInt(log2Ceil(maxNumBytes).W))
-        val time_encoder_output_bytes = Output(Vec(maxNumBytes, UInt(8.W)))
-        val prv_encoder_output_byte = Output(UInt(8.W))
+        val ctx_encoder_output_num_bytes = Output(UInt(log2Ceil(ctxMaxNumBytes).W))
         val prv_encoder_output_valid = Output(Bool())
-        val ctx_encoder_output_num_bytes = Output(UInt(log2Ceil(maxASIdBits/(8 - 1) + 1).W))
-        val ctx_encoder_output_bytes = Output(Vec((maxASIdBits/(8-1) + 1), UInt(8.W)))
-
         val fields = Output(new MessageFields())
     })
 
@@ -67,6 +70,9 @@ class MessageEncoder(val coreParams: TraceCoreParams, val maxASIdBits: Int) exte
             fields.has_target := true.B
             fields.has_prv := true.B
             fields.has_ctx := true.B
+        }
+        is(MessageType.UninfJump) {
+            fields.has_target := true.B
         }
     }   
 
@@ -92,17 +98,17 @@ class MessageEncoder(val coreParams: TraceCoreParams, val maxASIdBits: Int) exte
     prv_encoder.io.to_priv := io.prv_encoder_to_priv_input
 
     io.trap_addr_encoder_output_num_bytes := Mux(fields.has_trap, trap_addr_encoder.io.output_num_bytes, 0.U)
-    io.trap_addr_encoder_output_bytes := trap_addr_encoder.io.output_bytes
+    io.message.trap_addr_encoder_output_bytes := trap_addr_encoder.io.output_bytes
 
     io.target_addr_encoder_output_num_bytes := Mux(fields.has_target, target_addr_encoder.io.output_num_bytes, 0.U)
-    io.target_addr_encoder_output_bytes := target_addr_encoder.io.output_bytes
+    io.message.target_addr_encoder_output_bytes := target_addr_encoder.io.output_bytes
 
     io.time_encoder_output_num_bytes := Mux(io.packet_valid && !io.is_compressed, time_encoder.io.output_num_bytes, 0.U)
-    io.time_encoder_output_bytes := time_encoder.io.output_bytes
+    io.message.time_encoder_output_bytes := time_encoder.io.output_bytes
 
-    io.prv_encoder_output_byte := prv_encoder.io.output_byte
     io.prv_encoder_output_valid := (io.packet_valid && !io.is_compressed) && fields.has_prv
-
+    io.message.prv_encoder_output_byte := prv_encoder.io.output_byte
+    
     io.ctx_encoder_output_num_bytes := Mux(fields.has_ctx, ctx_encoder.io.output_num_bytes, 0.U)
-    io.ctx_encoder_output_bytes := ctx_encoder.io.output_bytes
+    io.message.ctx_encoder_output_bytes := ctx_encoder.io.output_bytes
 }
