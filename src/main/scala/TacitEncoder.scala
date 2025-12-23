@@ -41,6 +41,17 @@ object SyncType extends ChiselEnum {
   val SyncEnd = Value(0b011.U)
 }
 
+object MessageType extends ChiselEnum {
+  val Branch     = Value(0x0.U)
+  val InfJump    = Value(0x1.U)
+  val UninfJump  = Value(0x2.U)
+  val Trap       = Value(0x3.U)
+  val Return     = Value(0x4.U)
+  val Sync       = Value(0x5.U)
+  val BPHit      = Value(0x6.U)
+  val BPMiss     = Value(0x7.U)
+}
+
 object HeaderByte {
   def from_trap_type(header_type: FullHeaderType.Type, trap_type: TrapType.Type): UInt = {
     Cat(
@@ -129,19 +140,21 @@ class TacitEncoderModule(outer: TacitEncoder) extends LazyTraceEncoderModule(out
   }
 
   // encoders
-  val trap_addr_encoder = Module(new VarLenEncoder(coreParams.iaddrWidth))
-  val target_addr_encoder = Module(new VarLenEncoder(coreParams.iaddrWidth))
-  val time_encoder = Module(new VarLenEncoder(coreParams.xlen))
-  val prv_encoder = Module(new PrvEncoder)
-  val ctx_encoder = Module(new VarLenEncoder(maxASIdBits))
-  val metadataWidth = log2Ceil(trap_addr_encoder.maxNumBytes) + log2Ceil(target_addr_encoder.maxNumBytes) + log2Ceil(time_encoder.maxNumBytes) + 1
+  val trap_addr_encoder_max_num_bytes = coreParams.iaddrWidth / (8 - 1) + 1
+  val target_addr_encoder_max_num_bytes = coreParams.iaddrWidth / (8 - 1) + 1
+  val time_encoder_max_num_bytes = coreParams.xlen / (8 - 1) + 1
+  val ctx_encoder_max_num_bytes = maxASIdBits / (8 - 1) + 1
+
+  val metadataWidth = log2Ceil(trap_addr_encoder_max_num_bytes) + log2Ceil(target_addr_encoder_max_num_bytes) + log2Ceil(time_encoder_max_num_bytes) + 1
+
+  val message_encoder = Module(new MessageEncoder(coreParams, maxASIdBits))
 
   // queue buffers
-  val trap_addr_buffer = Module(new Queue(Vec(trap_addr_encoder.maxNumBytes, UInt(8.W)), outer.bufferDepth))
-  val target_addr_buffer = Module(new Queue(Vec(target_addr_encoder.maxNumBytes, UInt(8.W)), outer.bufferDepth))
-  val time_buffer = Module(new Queue(Vec(time_encoder.maxNumBytes, UInt(8.W)), outer.bufferDepth))
+  val trap_addr_buffer = Module(new Queue(Vec(trap_addr_encoder_max_num_bytes, UInt(8.W)), outer.bufferDepth))
+  val target_addr_buffer = Module(new Queue(Vec(target_addr_encoder_max_num_bytes, UInt(8.W)), outer.bufferDepth))
+  val time_buffer = Module(new Queue(Vec(time_encoder_max_num_bytes, UInt(8.W)), outer.bufferDepth))
   val prv_buffer = Module(new Queue(UInt(8.W), outer.bufferDepth)) 
-  val ctx_buffer = Module(new Queue(Vec(ctx_encoder.maxNumBytes, UInt(8.W)), outer.bufferDepth))
+  val ctx_buffer = Module(new Queue(Vec(ctx_encoder_max_num_bytes, UInt(8.W)), outer.bufferDepth))
   val byte_buffer = Module(new Queue(UInt(8.W), outer.bufferDepth)) // buffer compressed packet or full header
   val metadata_buffer = Module(new Queue(new MetaDataBundle(coreParams), outer.bufferDepth))
   
@@ -189,11 +202,11 @@ class TacitEncoderModule(outer: TacitEncoder) extends LazyTraceEncoderModule(out
 
   // metadata packing
   val metadata = Wire(new MetaDataBundle(coreParams))
-  metadata.prv := prv_encoder.io.output_valid
-  metadata.ctx := ctx_encoder.io.output_num_bytes
-  metadata.trap_addr := trap_addr_encoder.io.output_num_bytes
-  metadata.target_addr := target_addr_encoder.io.output_num_bytes
-  metadata.time := time_encoder.io.output_num_bytes
+  metadata.prv := message_encoder.io.prv_encoder_output_valid
+  metadata.ctx := message_encoder.io.ctx_encoder_output_num_bytes
+  metadata.trap_addr := message_encoder.io.trap_addr_encoder_output_num_bytes
+  metadata.target_addr := message_encoder.io.target_addr_encoder_output_num_bytes
+  metadata.time := message_encoder.io.time_encoder_output_num_bytes
   metadata.is_compressed := is_compressed
 
   metadata_buffer.io.enq.bits := metadata
@@ -204,20 +217,20 @@ class TacitEncoderModule(outer: TacitEncoder) extends LazyTraceEncoderModule(out
                                   header_byte)
   byte_buffer.io.enq.valid := packet_valid
   // trap address buffering
-  trap_addr_buffer.io.enq.bits := trap_addr_encoder.io.output_bytes
-  trap_addr_buffer.io.enq.valid := !is_compressed && packet_valid && encode_trap_addr_valid
+  trap_addr_buffer.io.enq.bits := message_encoder.io.trap_addr_encoder_output_bytes
+  trap_addr_buffer.io.enq.valid := !is_compressed && packet_valid && message_encoder.io.fields.has_trap
   // target address buffering
-  target_addr_buffer.io.enq.bits := target_addr_encoder.io.output_bytes
-  target_addr_buffer.io.enq.valid := !is_compressed && packet_valid && encode_target_addr_valid
+  target_addr_buffer.io.enq.bits := message_encoder.io.target_addr_encoder_output_bytes
+  target_addr_buffer.io.enq.valid := !is_compressed && packet_valid && message_encoder.io.fields.has_target
   // time buffering
-  time_buffer.io.enq.bits := time_encoder.io.output_bytes
+  time_buffer.io.enq.bits := message_encoder.io.time_encoder_output_bytes
   time_buffer.io.enq.valid := !is_compressed && packet_valid
   // prv buffering
-  prv_buffer.io.enq.bits := prv_encoder.io.output_byte
-  prv_buffer.io.enq.valid := !is_compressed && packet_valid && encode_prv_valid
+  prv_buffer.io.enq.bits := message_encoder.io.prv_encoder_output_byte
+  prv_buffer.io.enq.valid := !is_compressed && packet_valid && message_encoder.io.fields.has_prv
   // context buffering
-  ctx_buffer.io.enq.bits := ctx_encoder.io.output_bytes
-  ctx_buffer.io.enq.valid := !is_compressed && packet_valid && encode_ctx_valid
+  ctx_buffer.io.enq.bits := message_encoder.io.ctx_encoder_output_bytes
+  ctx_buffer.io.enq.valid := !is_compressed && packet_valid && message_encoder.io.fields.has_ctx
 
   // stall if any buffer is almost full 
   // technically it should always the byte buffer, but just to be safe
@@ -232,11 +245,19 @@ class TacitEncoderModule(outer: TacitEncoder) extends LazyTraceEncoderModule(out
     sent := true.B
   }
 
-  trap_addr_encoder.io.input_valid := encode_trap_addr_valid && !is_compressed && packet_valid
-  target_addr_encoder.io.input_valid := encode_target_addr_valid && !is_compressed && packet_valid
-  prv_encoder.io.input_valid := encode_prv_valid && !is_compressed && packet_valid
-  ctx_encoder.io.input_valid := encode_ctx_valid && !is_compressed && packet_valid
-  time_encoder.io.input_valid := !is_compressed && packet_valid
+  // trap_addr_encoder.io.input_valid := encode_trap_addr_valid && !is_compressed && packet_valid
+  // target_addr_encoder.io.input_valid := encode_target_addr_valid && !is_compressed && packet_valid
+  // prv_encoder.io.input_valid := encode_prv_valid && !is_compressed && packet_valid
+  // ctx_encoder.io.input_valid := encode_ctx_valid && !is_compressed && packet_valid
+  // time_encoder.io.input_valid := !is_compressed && packet_valid
+  
+  // message_encoder.io.encode_trap_addr_valid := encode_trap_addr_valid
+  // message_encoder.io.encode_target_addr_valid := encode_target_addr_valid
+  // message_encoder.io.encode_prv_valid := encode_prv_valid
+  // message_encoder.io.encode_ctx_valid := encode_ctx_valid
+  message_encoder.io.is_compressed := is_compressed
+  message_encoder.io.packet_valid := packet_valid
+
 
   /* 
   - oldest instruction -
@@ -274,18 +295,25 @@ class TacitEncoderModule(outer: TacitEncoder) extends LazyTraceEncoderModule(out
   bp_miss_flag_en := pipeline_advance && io.control.enable
 
   // default values
-  trap_addr_encoder.io.input_value := 0.U
-  target_addr_encoder.io.input_value := 0.U
-  time_encoder.io.input_value := 0.U
-  prv_encoder.io.from_priv := 0.U
-  prv_encoder.io.to_priv := 0.U
-  ctx_encoder.io.input_value := 0.U
+  message_encoder.io.trap_addr_encoder_input := 0.U
+  message_encoder.io.target_addr_encoder_input := 0.U
+  message_encoder.io.time_encoder_input := 0.U
+  message_encoder.io.prv_encoder_from_priv_input := 0.U
+  message_encoder.io.prv_encoder_to_priv_input := 0.U
+  message_encoder.io.ctx_encoder_input := 0.U
   is_compressed := false.B
   packet_valid := false.B
+  message_encoder.io.is_compressed := is_compressed
+  message_encoder.io.packet_valid := packet_valid
   encode_target_addr_valid := false.B
   encode_trap_addr_valid := false.B
   encode_prv_valid := false.B
   encode_ctx_valid := false.B
+
+  val message_type = Wire(MessageType())
+  message_type := MessageType.Branch
+  message_encoder.io.msg_type := message_type
+
   comp_header := CompressedHeaderType.CNA.asUInt
   header_byte := HeaderByte(FullHeaderType.FReserved)
   // state machine
@@ -297,24 +325,25 @@ class TacitEncoderModule(outer: TacitEncoder) extends LazyTraceEncoderModule(out
       }
     }
     is (sSync) {
+      message_type := MessageType.Sync
       header_byte := HeaderByte.from_sync_type(FullHeaderType.FSync, sync_type)
-      time_encoder.io.input_value := ingress_0.time
+      message_encoder.io.time_encoder_input := ingress_0.time
       prev_time := ingress_0.time
       // target address
-      target_addr_encoder.io.input_value := ingress_0.group(0).iaddr >> 1.U // last bit is always 0
+      message_encoder.io.target_addr_encoder_input := ingress_0.group(0).iaddr >> 1.U // last bit is always 0
       encode_target_addr_valid := true.B
       // prv
-      prv_encoder.io.from_priv := 0b00.U
-      prv_encoder.io.to_priv := ingress_0.priv
+      message_encoder.io.prv_encoder_from_priv_input := 0b00.U
+      message_encoder.io.prv_encoder_to_priv_input := ingress_0.priv
       encode_prv_valid := true.B
       // reuse trap address for runtime_cfg
       val runtime_cfg = Wire(UInt(7.W))
       // 2 bits for bp mode, 6 bits for n_entries
       runtime_cfg := Cat(log2Ceil(outer.bpParams.n_entries/64).U, io.control.bp_mode(1,0))
-      trap_addr_encoder.io.input_value := runtime_cfg
+      message_encoder.io.trap_addr_encoder_input := runtime_cfg
       encode_trap_addr_valid := sync_type === SyncType.SyncStart
       // context
-      ctx_encoder.io.input_value := ingress_0.ctx
+      message_encoder.io.ctx_encoder_input := ingress_0.ctx
       encode_ctx_valid := true.B
       is_compressed := false.B
       packet_valid := !sent
@@ -344,103 +373,113 @@ class TacitEncoderModule(outer: TacitEncoder) extends LazyTraceEncoderModule(out
           // encode hit packet
           header_byte := HeaderByte(FullHeaderType.FTakenBranch)
           comp_header := CompressedHeaderType.CTB.asUInt
-          time_encoder.io.input_value := bp_hit_count
+          message_encoder.io.time_encoder_input := bp_hit_count
           is_compressed := bp_hit_count <= MAX_DELTA_TIME_COMP.U
           packet_valid := !sent && is_bp_mode
+          message_type := MessageType.BPHit
         }
         .elsewhen (bp_miss_flag && is_bp_mode) {
           // encode miss packet
           header_byte := HeaderByte(FullHeaderType.FNotTakenBranch)
           comp_header := CompressedHeaderType.CNT.asUInt
-          time_encoder.io.input_value := delta_time
+          message_encoder.io.time_encoder_input := delta_time
           prev_time := Mux(byte_buffer.io.enq.fire, ingress_1.time, prev_time)
           is_compressed := delta_time <= MAX_DELTA_TIME_COMP.U
           packet_valid := !sent && is_bp_mode
+          message_type := MessageType.BPMiss
         }
         .elsewhen (ingress_1_has_message) {
           switch (ingress_1.group(ingress_1_msg_idx).itype) {
             is (TraceItype.ITNothing) {
               packet_valid := false.B
+              message_type := DontCare
             }
             is (TraceItype.ITBrTaken) {
               header_byte := HeaderByte(FullHeaderType.FTakenBranch)
               comp_header := CompressedHeaderType.CTB.asUInt
-              time_encoder.io.input_value := delta_time
+              message_encoder.io.time_encoder_input := delta_time
               prev_time := Mux(byte_buffer.io.enq.fire, ingress_1.time, prev_time)
               is_compressed := delta_time <= MAX_DELTA_TIME_COMP.U
               packet_valid := !sent && is_bt_mode
+              message_type := MessageType.Branch
             }
             is (TraceItype.ITBrNTaken) {
               header_byte := HeaderByte(FullHeaderType.FNotTakenBranch)
               comp_header := CompressedHeaderType.CNT.asUInt
-              time_encoder.io.input_value := delta_time
+              message_encoder.io.time_encoder_input := delta_time
               prev_time := Mux(byte_buffer.io.enq.fire, ingress_1.time, prev_time)
               is_compressed := delta_time <= MAX_DELTA_TIME_COMP.U
               packet_valid := !sent && is_bt_mode
+              message_type := MessageType.Branch
             }
             is (TraceItype.ITInJump) {
               header_byte := HeaderByte(FullHeaderType.FInfJump)
               comp_header := CompressedHeaderType.CIJ.asUInt
-              time_encoder.io.input_value := delta_time
+              message_encoder.io.time_encoder_input := delta_time
               prev_time := Mux(byte_buffer.io.enq.fire, ingress_1.time, prev_time)
               is_compressed := delta_time <= MAX_DELTA_TIME_COMP.U
               packet_valid := !sent && is_bt_mode
+              message_type := MessageType.InfJump
             }
             is (TraceItype.ITUnJump) {
               header_byte := HeaderByte(FullHeaderType.FUninfJump)
-              time_encoder.io.input_value := delta_time 
+              message_encoder.io.time_encoder_input := delta_time 
               prev_time := Mux(byte_buffer.io.enq.fire, ingress_1.time, prev_time)
-              target_addr_encoder.io.input_value := target_addr_msg
+              message_encoder.io.target_addr_encoder_input := target_addr_msg
               encode_target_addr_valid := true.B
               is_compressed := false.B
               packet_valid := !sent
+              message_type := MessageType.UninfJump
             }
             is (TraceItype.ITException) {
               header_byte := HeaderByte.from_trap_type(FullHeaderType.FTrap, TrapType.TException)
               comp_header := CompressedHeaderType.CNA.asUInt
-              time_encoder.io.input_value := delta_time
+              message_encoder.io.time_encoder_input := delta_time
               prev_time := Mux(byte_buffer.io.enq.fire, ingress_1.time, prev_time)
-              target_addr_encoder.io.input_value := target_addr_msg
+              message_encoder.io.target_addr_encoder_input := target_addr_msg
               encode_target_addr_valid := true.B
-              trap_addr_encoder.io.input_value := ingress_1.group(ingress_1_msg_idx).iaddr >> 1.U
+              message_encoder.io.trap_addr_encoder_input := ingress_1.group(ingress_1_msg_idx).iaddr >> 1.U
               encode_trap_addr_valid := true.B
-              prv_encoder.io.from_priv := ingress_1.priv
-              prv_encoder.io.to_priv := ingress_0.priv
+              message_encoder.io.prv_encoder_from_priv_input := ingress_1.priv
+              message_encoder.io.prv_encoder_to_priv_input := ingress_0.priv
               encode_prv_valid := true.B
               is_compressed := false.B
               packet_valid := !sent
+              message_type := MessageType.Trap
             }
             is (TraceItype.ITInterrupt) {
               header_byte := HeaderByte.from_trap_type(FullHeaderType.FTrap, TrapType.TInterrupt)
               comp_header := CompressedHeaderType.CNA.asUInt
-              time_encoder.io.input_value := delta_time
+              message_encoder.io.time_encoder_input := delta_time
               prev_time := Mux(byte_buffer.io.enq.fire, ingress_1.time, prev_time)
-              target_addr_encoder.io.input_value := target_addr_msg
+              message_encoder.io.target_addr_encoder_input := target_addr_msg
               encode_target_addr_valid := true.B
-              trap_addr_encoder.io.input_value := ingress_1.group(ingress_1_msg_idx).iaddr >> 1.U
+              message_encoder.io.trap_addr_encoder_input := ingress_1.group(ingress_1_msg_idx).iaddr >> 1.U
               encode_trap_addr_valid := true.B
-              prv_encoder.io.from_priv := ingress_1.priv
-              prv_encoder.io.to_priv := ingress_0.priv
+              message_encoder.io.prv_encoder_from_priv_input := ingress_1.priv
+              message_encoder.io.prv_encoder_to_priv_input := ingress_0.priv
               encode_prv_valid := true.B
               is_compressed := false.B
               packet_valid := !sent
+              message_type := MessageType.Trap
             }
             is (TraceItype.ITReturn) {
               header_byte := HeaderByte.from_trap_type(FullHeaderType.FTrap, TrapType.TReturn)
               comp_header := CompressedHeaderType.CNA.asUInt
-              time_encoder.io.input_value := delta_time
+              message_encoder.io.time_encoder_input := delta_time
               prev_time := Mux(byte_buffer.io.enq.fire, ingress_1.time, prev_time)
-              target_addr_encoder.io.input_value := target_addr_msg
+              message_encoder.io.target_addr_encoder_input := target_addr_msg
               encode_target_addr_valid := true.B
-              trap_addr_encoder.io.input_value := ingress_1.group(ingress_1_msg_idx).iaddr >> 1.U
+              message_encoder.io.trap_addr_encoder_input := ingress_1.group(ingress_1_msg_idx).iaddr >> 1.U
               encode_trap_addr_valid := true.B
-              prv_encoder.io.from_priv := ingress_1.priv
-              prv_encoder.io.to_priv := ingress_0.priv
+              message_encoder.io.prv_encoder_from_priv_input := ingress_1.priv
+              message_encoder.io.prv_encoder_to_priv_input := ingress_0.priv
               encode_prv_valid := true.B
-              ctx_encoder.io.input_value := ingress_1.ctx
+              message_encoder.io.ctx_encoder_input := ingress_1.ctx
               encode_ctx_valid := ingress_0.priv === 0.U // encode ctx if returning to user mode
               is_compressed := false.B
               packet_valid := !sent
+              message_type := MessageType.Return
             }
           }
         }
