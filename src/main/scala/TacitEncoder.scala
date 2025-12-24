@@ -111,7 +111,7 @@ class TacitEncoderModule(outer: TacitEncoder) extends LazyTraceEncoderModule(out
   val coreParams = outer.coreParams
 
   val MAX_DELTA_TIME_COMP = 0x3F // 63, 6 bits
-  def stallThreshold(count: UInt) = count >= (outer.bufferDepth - outer.coreStages).U
+  def stallThreshold(count: UInt) = count >= (outer.bufferDepth - outer.coreStages - coreParams.nGroups).U
 
   // mode of operation
   // 0: branch target only
@@ -150,9 +150,12 @@ class TacitEncoderModule(outer: TacitEncoder) extends LazyTraceEncoderModule(out
   val message_encoder = Seq.fill(coreParams.nGroups) (Module(new MessageEncoder(coreParams)))
 
   // buffers
-  val message_buffer = Module(new Queue(new MessageBundle(coreParams), outer.bufferDepth))
-  val byte_buffer = Module(new Queue(UInt(8.W), outer.bufferDepth)) // buffer compressed packet or full header
-  val metadata_buffer = Module(new Queue(new MetaDataBundle(coreParams), outer.bufferDepth))
+  val message_buffer  = Module(new MultiPortQueueDecoupled(new MessageBundle(coreParams), coreParams.nGroups, outer.bufferDepth))
+  val metadata_buffer = Module(new MultiPortQueueDecoupled(new MetaDataBundle(coreParams), coreParams.nGroups, outer.bufferDepth))
+  val byte_buffer     = Module(new MultiPortQueueDecoupled(UInt(8.W), coreParams.nGroups, outer.bufferDepth))
+  // val message_buffer = Module(new Queue(new MessageBundle(coreParams), outer.bufferDepth))
+  // val byte_buffer = Module(new Queue(UInt(8.W), outer.bufferDepth)) // buffer compressed packet or full header
+  // val metadata_buffer = Module(new Queue(new MetaDataBundle(coreParams), outer.bufferDepth))
   
   // intermediate packet signals
   val is_compressed = Wire(Vec(coreParams.nGroups, Bool()))
@@ -160,7 +163,7 @@ class TacitEncoderModule(outer: TacitEncoder) extends LazyTraceEncoderModule(out
   val packet_valid  = Wire(Vec(coreParams.nGroups, Bool()))
   val header_byte   = Wire(Vec(coreParams.nGroups, UInt(8.W))) // full header
 
-  val comp_packet   = Wire(UInt(8.W)) // compressed packet
+  val comp_packet   = Wire(Vec(coreParams.nGroups, UInt(8.W))) // compressed packet
   val comp_header   = Wire(Vec(coreParams.nGroups, UInt(CompressedHeaderType.getWidth.W))) // compressed header
   
   // branch predictor
@@ -178,7 +181,10 @@ class TacitEncoderModule(outer: TacitEncoder) extends LazyTraceEncoderModule(out
   bp_flush_hit := false.B
   
   val bp_hit_packet = Cat(bp_hit_count(5, 0), comp_header(0))
-  comp_packet := Cat(delta_time(5, 0), comp_header(0))
+  for (i <- 0 until coreParams.nGroups) {
+    comp_packet(i) := Cat(delta_time(5, 0), comp_header(i))
+  }
+  
 
   // packetization of buffered message
   val trace_packetizer = Module(new TracePacketizer(coreParams))
@@ -255,20 +261,19 @@ class TacitEncoderModule(outer: TacitEncoder) extends LazyTraceEncoderModule(out
                             (ingress_1.group(ingress_1_msg_idx).iaddr ^ ingress_1.group(ingress_1_msg_idx + 1.U).iaddr) >> 1.U)
   
 
-  metadata_buffer.io.enq.bits := metadata(ingress_1_msg_idx) 
-  metadata_buffer.io.enq.valid := packet_valid(ingress_1_msg_idx)
+  // Connect all message encoders to the multiport queue
+  for (i <- 0 until coreParams.nGroups) {
+    message_buffer.io.enq(i).bits  := message_encoder(i).io.message
+    message_buffer.io.enq(i).valid := !is_compressed(i) && packet_valid(i)
 
-  // buffering compressed packet or full header depending on is_compressed
-  byte_buffer.io.enq.bits := Mux(is_compressed(ingress_1_msg_idx), 
-                                  Mux(bp_flush_hit, bp_hit_packet, comp_packet),
-                                  header_byte(0))
-  byte_buffer.io.enq.valid := packet_valid(ingress_1_msg_idx)
+    metadata_buffer.io.enq(i).bits  := metadata(i)
+    metadata_buffer.io.enq(i).valid := packet_valid(i)
 
-  /* message buffering (replaces separated buffers) */
-  
-  val encoder_outputs = VecInit(message_encoder.map(_.io.message))
-  message_buffer.io.enq.bits := encoder_outputs(ingress_1_msg_idx)
-  message_buffer.io.enq.valid := !is_compressed(ingress_1_msg_idx) && packet_valid(ingress_1_msg_idx)
+    byte_buffer.io.enq(i).bits  := Mux(is_compressed(i), comp_packet(i), header_byte(i))
+    byte_buffer.io.enq(i).valid := packet_valid(i)
+  }
+
+
 
   // stall if any buffer is almost full 
   // technically it should always the byte buffer, but just to be safe
@@ -279,7 +284,7 @@ class TacitEncoderModule(outer: TacitEncoder) extends LazyTraceEncoderModule(out
   // reset takes priority over enqueue
   when (pipeline_advance) {
     sent := false.B
-  } .elsewhen (byte_buffer.io.enq.fire) {
+  } .elsewhen (byte_buffer.io.enqFire.reduce(_ || _)) {
     sent := true.B
   }
 
@@ -322,7 +327,7 @@ class TacitEncoderModule(outer: TacitEncoder) extends LazyTraceEncoderModule(out
       is_compressed(0) := false.B
       packet_valid(0) := !sent
       // state transition: wait for message to go in
-      state := Mux(pipeline_advance && (sent || byte_buffer.io.enq.fire), Mux(io.control.enable, sData, sIdle), sSync)
+      state := Mux(pipeline_advance && (sent || byte_buffer.io.enqFire.reduce(_ || _)), Mux(io.control.enable, sData, sIdle), sSync)
     }
     is (sData) {
       when (!io.control.enable) {
@@ -345,109 +350,113 @@ class TacitEncoderModule(outer: TacitEncoder) extends LazyTraceEncoderModule(out
         // ingress1 logic - message encoding
         when (bp_flush_hit && is_bp_mode) {
           // encode hit packet
-          header_byte(0) := HeaderByte(FullHeaderType.FTakenBranch)
-          comp_header(0) := CompressedHeaderType.CTB.asUInt
+          header_byte(ingress_1_msg_idx) := HeaderByte(FullHeaderType.FTakenBranch)
+          comp_header(ingress_1_msg_idx) := CompressedHeaderType.CTB.asUInt
           message_encoder(0).io.time_encoder_input := bp_hit_count
-          is_compressed(0) := bp_hit_count <= MAX_DELTA_TIME_COMP.U
-          packet_valid(0) := !sent && is_bp_mode
-          message_type(0) := MessageType.BPHit
+          is_compressed(ingress_1_msg_idx) := bp_hit_count <= MAX_DELTA_TIME_COMP.U
+          packet_valid(ingress_1_msg_idx) := !sent && is_bp_mode
+          message_type(ingress_1_msg_idx) := MessageType.BPHit
         }
         .elsewhen (bp_miss_flag && is_bp_mode) {
           // encode miss packet
-          header_byte(0) := HeaderByte(FullHeaderType.FNotTakenBranch)
-          comp_header(0) := CompressedHeaderType.CNT.asUInt
+          header_byte(ingress_1_msg_idx) := HeaderByte(FullHeaderType.FNotTakenBranch)
+          comp_header(ingress_1_msg_idx) := CompressedHeaderType.CNT.asUInt
           message_encoder(0).io.time_encoder_input := delta_time
-          prev_time := Mux(byte_buffer.io.enq.fire, ingress_1.time, prev_time)
-          is_compressed(0) := delta_time <= MAX_DELTA_TIME_COMP.U
-          packet_valid(0) := !sent && is_bp_mode
-          message_type(0) := MessageType.BPMiss
+          prev_time := Mux(byte_buffer.io.enqFire.reduce(_ || _), ingress_1.time, prev_time)
+          is_compressed(ingress_1_msg_idx) := delta_time <= MAX_DELTA_TIME_COMP.U
+          packet_valid(ingress_1_msg_idx) := !sent && is_bp_mode
+          message_type(ingress_1_msg_idx) := MessageType.BPMiss
         }
         .elsewhen (ingress_1_has_message) {
           for (i <- 0 until coreParams.nGroups) {
-            switch (ingress_1.group(i).itype) {
-              is (TraceItype.ITNothing) {
-                packet_valid(i) := false.B
-                message_type(i) := DontCare
-              }
-              is (TraceItype.ITBrTaken) {
-                header_byte(i) := HeaderByte(FullHeaderType.FTakenBranch)
-                comp_header(i) := CompressedHeaderType.CTB.asUInt
-                message_encoder(i).io.time_encoder_input := delta_time
-                prev_time := Mux(byte_buffer.io.enq.fire, ingress_1.time, prev_time)
-                is_compressed(i) := delta_time <= MAX_DELTA_TIME_COMP.U
-                packet_valid(i) := !sent && is_bt_mode
-                message_type(i) := MessageType.Branch
-              }
-              is (TraceItype.ITBrNTaken) {
-                header_byte(i) := HeaderByte(FullHeaderType.FNotTakenBranch)
-                comp_header(i) := CompressedHeaderType.CNT.asUInt
-                message_encoder(i).io.time_encoder_input := delta_time
-                prev_time := Mux(byte_buffer.io.enq.fire, ingress_1.time, prev_time)
-                is_compressed(i) := delta_time <= MAX_DELTA_TIME_COMP.U
-                packet_valid(i) := !sent && is_bt_mode
-                message_type(i) := MessageType.Branch
-              }
-              is (TraceItype.ITInJump) {
-                header_byte(i) := HeaderByte(FullHeaderType.FInfJump)
-                comp_header(i) := CompressedHeaderType.CIJ.asUInt
-                message_encoder(i).io.time_encoder_input := delta_time
-                prev_time := Mux(byte_buffer.io.enq.fire, ingress_1.time, prev_time)
-                is_compressed(i) := delta_time <= MAX_DELTA_TIME_COMP.U
-                packet_valid(i) := !sent && is_bt_mode
-                message_type(i) := MessageType.InfJump
-              }
-              is (TraceItype.ITUnJump) {
-                header_byte(i) := HeaderByte(FullHeaderType.FUninfJump)
-                message_encoder(i).io.time_encoder_input := delta_time 
-                prev_time := Mux(byte_buffer.io.enq.fire, ingress_1.time, prev_time)
-                message_encoder(i).io.target_addr_encoder_input := target_addr_msg
-                is_compressed(i) := false.B
-                packet_valid(i) := !sent
-                message_type(i) := MessageType.UninfJump
-              }
-              is (TraceItype.ITException) {
-                header_byte(i) := HeaderByte.from_trap_type(FullHeaderType.FTrap, TrapType.TException)
-                comp_header(i) := CompressedHeaderType.CNA.asUInt
-                message_encoder(i).io.time_encoder_input := delta_time
-                prev_time := Mux(byte_buffer.io.enq.fire, ingress_1.time, prev_time)
-                message_encoder(i).io.target_addr_encoder_input := target_addr_msg
-                message_encoder(i).io.trap_addr_encoder_input := ingress_1.group(ingress_1_msg_idx).iaddr >> 1.U
-                message_encoder(i).io.prv_encoder_from_priv_input := ingress_1.priv
-                message_encoder(i).io.prv_encoder_to_priv_input := ingress_0.priv
-                is_compressed(i) := false.B
-                packet_valid(i) := !sent
-                message_type(i) := MessageType.Trap
-              }
-              is (TraceItype.ITInterrupt) {
-                header_byte(i) := HeaderByte.from_trap_type(FullHeaderType.FTrap, TrapType.TInterrupt)
-                comp_header(i) := CompressedHeaderType.CNA.asUInt
-                message_encoder(i).io.time_encoder_input := delta_time
-                prev_time := Mux(byte_buffer.io.enq.fire, ingress_1.time, prev_time)
-                message_encoder(i).io.target_addr_encoder_input := target_addr_msg
-                message_encoder(i).io.trap_addr_encoder_input := ingress_1.group(ingress_1_msg_idx).iaddr >> 1.U
-                message_encoder(i).io.prv_encoder_from_priv_input := ingress_1.priv
-                message_encoder(i).io.prv_encoder_to_priv_input := ingress_0.priv
-                is_compressed(i) := false.B
-                packet_valid(i) := !sent
-                message_type(i) := MessageType.Trap
-              }
-              is (TraceItype.ITReturn) {
-                header_byte(i) := HeaderByte.from_trap_type(FullHeaderType.FTrap, TrapType.TReturn)
-                comp_header(i) := CompressedHeaderType.CNA.asUInt
-                message_encoder(i).io.time_encoder_input := delta_time
-                prev_time := Mux(byte_buffer.io.enq.fire, ingress_1.time, prev_time)
-                message_encoder(i).io.target_addr_encoder_input := target_addr_msg
-                message_encoder(i).io.trap_addr_encoder_input := ingress_1.group(ingress_1_msg_idx).iaddr >> 1.U
-                message_encoder(i).io.prv_encoder_from_priv_input := ingress_1.priv
-                message_encoder(i).io.prv_encoder_to_priv_input := ingress_0.priv
-                message_encoder(i).io.ctx_encoder_input := ingress_1.ctx
-                is_compressed(i) := false.B
-                packet_valid(i) := !sent
-                message_type(i) := MessageType.Return
+            when (ingress_1.group(i).iretire === 0.U) {
+              packet_valid(i) := false.B
+              message_type(i) := DontCare
+            } .otherwise {
+              switch (ingress_1.group(i).itype) {
+                is (TraceItype.ITNothing) {
+                  packet_valid(i) := false.B
+                  message_type(i) := DontCare
+                }
+                is (TraceItype.ITBrTaken) {
+                  header_byte(i) := HeaderByte(FullHeaderType.FTakenBranch)
+                  comp_header(i) := CompressedHeaderType.CTB.asUInt
+                  message_encoder(i).io.time_encoder_input := delta_time
+                  prev_time := Mux(byte_buffer.io.enqFire.reduce(_ || _), ingress_1.time, prev_time)
+                  is_compressed(i) := delta_time <= MAX_DELTA_TIME_COMP.U
+                  packet_valid(i) := !sent && is_bt_mode
+                  message_type(i) := MessageType.Branch
+                }
+                is (TraceItype.ITBrNTaken) {
+                  header_byte(i) := HeaderByte(FullHeaderType.FNotTakenBranch)
+                  comp_header(i) := CompressedHeaderType.CNT.asUInt
+                  message_encoder(i).io.time_encoder_input := delta_time
+                  prev_time := Mux(byte_buffer.io.enqFire.reduce(_ || _), ingress_1.time, prev_time)
+                  is_compressed(i) := delta_time <= MAX_DELTA_TIME_COMP.U
+                  packet_valid(i) := !sent && is_bt_mode
+                  message_type(i) := MessageType.Branch
+                }
+                is (TraceItype.ITInJump) {
+                  header_byte(i) := HeaderByte(FullHeaderType.FInfJump)
+                  comp_header(i) := CompressedHeaderType.CIJ.asUInt
+                  message_encoder(i).io.time_encoder_input := delta_time
+                  prev_time := Mux(byte_buffer.io.enqFire.reduce(_ || _), ingress_1.time, prev_time)
+                  is_compressed(i) := delta_time <= MAX_DELTA_TIME_COMP.U
+                  packet_valid(i) := !sent && is_bt_mode
+                  message_type(i) := MessageType.InfJump
+                }
+                is (TraceItype.ITUnJump) {
+                  header_byte(i) := HeaderByte(FullHeaderType.FUninfJump)
+                  message_encoder(i).io.time_encoder_input := delta_time 
+                  prev_time := Mux(byte_buffer.io.enqFire.reduce(_ || _), ingress_1.time, prev_time)
+                  message_encoder(i).io.target_addr_encoder_input := target_addr_msg
+                  is_compressed(i) := false.B
+                  packet_valid(i) := !sent
+                  message_type(i) := MessageType.UninfJump
+                }
+                is (TraceItype.ITException) {
+                  header_byte(i) := HeaderByte.from_trap_type(FullHeaderType.FTrap, TrapType.TException)
+                  comp_header(i) := CompressedHeaderType.CNA.asUInt
+                  message_encoder(i).io.time_encoder_input := delta_time
+                  prev_time := Mux(byte_buffer.io.enqFire.reduce(_ || _), ingress_1.time, prev_time)
+                  message_encoder(i).io.target_addr_encoder_input := target_addr_msg
+                  message_encoder(i).io.trap_addr_encoder_input := ingress_1.group(ingress_1_msg_idx).iaddr >> 1.U
+                  message_encoder(i).io.prv_encoder_from_priv_input := ingress_1.priv
+                  message_encoder(i).io.prv_encoder_to_priv_input := ingress_0.priv
+                  is_compressed(i) := false.B
+                  packet_valid(i) := !sent
+                  message_type(i) := MessageType.Trap
+                }
+                is (TraceItype.ITInterrupt) {
+                  header_byte(i) := HeaderByte.from_trap_type(FullHeaderType.FTrap, TrapType.TInterrupt)
+                  comp_header(i) := CompressedHeaderType.CNA.asUInt
+                  message_encoder(i).io.time_encoder_input := delta_time
+                  prev_time := Mux(byte_buffer.io.enqFire.reduce(_ || _), ingress_1.time, prev_time)
+                  message_encoder(i).io.target_addr_encoder_input := target_addr_msg
+                  message_encoder(i).io.trap_addr_encoder_input := ingress_1.group(ingress_1_msg_idx).iaddr >> 1.U
+                  message_encoder(i).io.prv_encoder_from_priv_input := ingress_1.priv
+                  message_encoder(i).io.prv_encoder_to_priv_input := ingress_0.priv
+                  is_compressed(i) := false.B
+                  packet_valid(i) := !sent
+                  message_type(i) := MessageType.Trap
+                }
+                is (TraceItype.ITReturn) {
+                  header_byte(i) := HeaderByte.from_trap_type(FullHeaderType.FTrap, TrapType.TReturn)
+                  comp_header(i) := CompressedHeaderType.CNA.asUInt
+                  message_encoder(i).io.time_encoder_input := delta_time
+                  prev_time := Mux(byte_buffer.io.enqFire.reduce(_ || _), ingress_1.time, prev_time)
+                  message_encoder(i).io.target_addr_encoder_input := target_addr_msg
+                  message_encoder(i).io.trap_addr_encoder_input := ingress_1.group(ingress_1_msg_idx).iaddr >> 1.U
+                  message_encoder(i).io.prv_encoder_from_priv_input := ingress_1.priv
+                  message_encoder(i).io.prv_encoder_to_priv_input := ingress_0.priv
+                  message_encoder(i).io.ctx_encoder_input := ingress_1.ctx
+                  is_compressed(i) := false.B
+                  packet_valid(i) := !sent
+                  message_type(i) := MessageType.Return
+                }
               }
             }
           }
-          
         }
       }
     }

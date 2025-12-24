@@ -93,7 +93,6 @@ class TracePacketizer(val coreParams: TraceCoreParams) extends Module with MetaD
     }
     is (pFull) {
       // header, addr, time
-      io.out.valid := true.B
       when (header_num_bytes > 0.U && header_index < header_num_bytes) {
         io.out.bits := io.byte.bits
         io.out.valid := io.byte.valid

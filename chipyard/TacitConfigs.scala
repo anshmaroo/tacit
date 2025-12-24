@@ -9,6 +9,7 @@ import freechips.rocketchip.trace.{TraceCoreParams, TraceEncoderParams}
 
 import shuttle.common.ShuttleTileAttachParams
 import tacit.{TacitEncoder, TacitBPParams}
+import boom.v3.common.BoomTileAttachParams
 
 // Add a Tacit encoder to each tile
 class WithTacitEncoder extends Config((site, here, up) => {
@@ -17,7 +18,7 @@ class WithTacitEncoder extends Config((site, here, up) => {
       traceParams = Some(TraceEncoderParams(
         encoderBaseAddr = 0x3000000 + tp.tileParams.tileId * 0x1000,
         buildEncoder = (p: Parameters) => LazyModule(new TacitEncoder(new TraceCoreParams(
-          nGroups = 1,
+          nGroups = tp.tileParams.core.retireWidth,
           xlen = tp.tileParams.core.xLen,
           iaddrWidth = tp.tileParams.core.xLen
         ),
@@ -28,6 +29,20 @@ class WithTacitEncoder extends Config((site, here, up) => {
       )),
       core = tp.tileParams.core.copy(enableTraceCoreIngress = true)))
     case tp: ShuttleTileAttachParams => tp.copy(tileParams = tp.tileParams.copy(
+      traceParams = Some(TraceEncoderParams(
+        encoderBaseAddr = 0x3000000 + tp.tileParams.tileId * 0x1000,
+        buildEncoder = (p: Parameters) => LazyModule(new TacitEncoder(new TraceCoreParams(
+          nGroups = tp.tileParams.core.retireWidth,
+          xlen = tp.tileParams.core.xLen,
+          iaddrWidth = tp.tileParams.core.xLen
+        ),
+        bufferDepth = 16,
+        coreStages = 7,
+        bpParams = TacitBPParams(xlen = tp.tileParams.core.xLen, n_entries = 1024))(p)),
+        useArbiterMonitor = false
+      )),
+      core = tp.tileParams.core.copy(enableTraceCoreIngress = true)))
+    case tp: BoomTileAttachParams => tp.copy(tileParams = tp.tileParams.copy(
       traceParams = Some(TraceEncoderParams(
         encoderBaseAddr = 0x3000000 + tp.tileParams.tileId * 0x1000,
         buildEncoder = (p: Parameters) => LazyModule(new TacitEncoder(new TraceCoreParams(
