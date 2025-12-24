@@ -9,6 +9,7 @@ import org.chipsalliance.cde.config.{Parameters, Config, Field}
 import freechips.rocketchip.tile._
 import freechips.rocketchip.subsystem._
 import shuttle.common.{ShuttleTile, ShuttleTileAttachParams}
+import boom.v3.common.{BoomTile, BoomTileAttachParams}
 
 import freechips.rocketchip.trace._
 
@@ -48,6 +49,12 @@ class WithTraceSinkRawByte(targetId: Int = 0) extends Config((site, here, up) =>
           tp.tileParams.traceParams.get.buildSinks :+ (p => (LazyModule(new TraceSinkRawByte()(p)), targetId)))))
       )
     }
+    case tp: BoomTileAttachParams => {
+      tp.copy(tileParams = tp.tileParams.copy(
+        traceParams = Some(tp.tileParams.traceParams.get.copy(buildSinks = 
+          tp.tileParams.traceParams.get.buildSinks :+ (p => (LazyModule(new TraceSinkRawByte()(p)), targetId)))))
+      )
+    }
     case other => other
   }
 })
@@ -58,6 +65,7 @@ trait CanHaveTraceSinkRawByte { this: BaseSubsystem =>
   val TraceSinkRawBytes = hierarchicalSubsystem.totalTiles.values.map { t => t match {
     case r: RocketTile => r.trace_sinks.collect { case r: TraceSinkRawByte => (t, r) }
     case s: ShuttleTile => s.trace_sinks.collect { case r: TraceSinkRawByte => (t, r) }
+    case b: BoomTile => b.trace_sinks.collect { case r: TraceSinkRawByte => (t, r)  }
     case _ => Nil
   }}.flatten
   val tacit_bytes = if (TraceSinkRawBytes.nonEmpty) {

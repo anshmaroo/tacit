@@ -10,6 +10,7 @@ import freechips.rocketchip.prci._
 import freechips.rocketchip.regmapper.{RegField, RegFieldDesc}
 import freechips.rocketchip.tile._
 import shuttle.common.{ShuttleTile, ShuttleTileAttachParams}
+import boom.v3.common.{BoomTile, BoomTileAttachParams}
 import freechips.rocketchip.trace._
 import testchipip.soc.{SubsystemInjector, SubsystemInjectorKey}
 
@@ -164,6 +165,16 @@ class WithTraceSinkDMA(targetId: Int = 1) extends Config((site, here, up) => {
             beatBytes = xBytes), hartId = tp.tileParams.tileId)(p)), targetId)))))
       )
     }
+    case tp: BoomTileAttachParams => {
+      val xBytes = tp.tileParams.core.xLen / 8
+      tp.copy(tileParams = tp.tileParams.copy(
+        traceParams = Some(tp.tileParams.traceParams.get.copy(buildSinks = 
+          tp.tileParams.traceParams.get.buildSinks :+ (p => 
+            (LazyModule(new TraceSinkDMA(TraceSinkDMAParams(
+            regNodeBaseAddr = 0x3010000 + tp.tileParams.tileId * 0x1000,
+            beatBytes = xBytes), hartId = tp.tileParams.tileId)(p)), targetId)))))
+      )
+    }
     case other => other
   }
   case SubsystemInjectorKey => up(SubsystemInjectorKey) + TraceSinkDMAInjector
@@ -176,6 +187,7 @@ case object TraceSinkDMAInjector extends SubsystemInjector((p, baseSubsystem) =>
   val traceSinkDMAs = hierarchicalSubsystem.totalTiles.values.map { t => t match {
     case r: RocketTile => r.trace_sinks.collect { case r: TraceSinkDMA => (t, r) }
     case s: ShuttleTile => s.trace_sinks.collect { case r: TraceSinkDMA => (t, r) }
+    case b: BoomTile => b.trace_sinks.collect { case r: TraceSinkDMA => (t, r) }
     case _ => Nil
   }}.flatten
   if (traceSinkDMAs.nonEmpty) {
