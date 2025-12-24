@@ -99,7 +99,7 @@ class TacitRocketRawByteConfig extends Config(
   new chipyard.config.WithTraceArbiterMonitor ++
   new chipyard.WithTacitEncoder ++
   new freechips.rocketchip.subsystem.WithoutTLMonitors ++
-  new chipyard.config.WithAsidLen(16) ++
+  // new chipyard.config.WithAsidLen(16) ++
   new freechips.rocketchip.rocket.WithL1DCacheNonblocking(2) ++     // non-blocking L1D$, L1 prefetching only works with non-blocking L1D$
   new freechips.rocketchip.rocket.WithNHugeCores(1) ++
   new chipyard.config.AbstractConfig)
@@ -112,7 +112,7 @@ class TacitRocketRawBytePrefetchConfig extends Config(
   new chipyard.config.WithTraceArbiterMonitor ++
   new chipyard.WithTacitEncoder ++
   new freechips.rocketchip.subsystem.WithoutTLMonitors ++
-  new chipyard.config.WithAsidLen(16) ++
+  // new chipyard.config.WithAsidLen(16) ++
   new freechips.rocketchip.rocket.WithL1DCacheNonblocking(8) ++     // non-blocking L1D$, L1 prefetching only works with non-blocking L1D$
   new freechips.rocketchip.rocket.WithNHugeCores(1) ++
   new chipyard.config.AbstractConfig)
@@ -124,6 +124,6 @@ class TacitDualRocketRawByteConfig extends Config(
   new chipyard.config.WithTraceArbiterMonitor ++
   new chipyard.WithTacitEncoder ++
   new freechips.rocketchip.subsystem.WithoutTLMonitors ++
-  new chipyard.config.WithAsidLen(16) ++
+  // new chipyard.config.WithAsidLen(16) ++
   new freechips.rocketchip.rocket.WithNHugeCores(2) ++
   new chipyard.config.AbstractConfig)
