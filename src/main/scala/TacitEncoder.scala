@@ -134,7 +134,8 @@ class TacitEncoderModule(outer: TacitEncoder) extends LazyTraceEncoderModule(out
 
   // shift every cycle, if not stalled
   val pipeline_advance = Wire(Bool())
-  pipeline_advance := io.in.group(0).iretire === 1.U
+  
+  pipeline_advance := io.in.group.map(g => g.iretire === 1.U).reduce(_ || _)
   when (pipeline_advance) {
     ingress_0 := io.in
     ingress_1 := ingress_0
@@ -150,9 +151,9 @@ class TacitEncoderModule(outer: TacitEncoder) extends LazyTraceEncoderModule(out
   val message_encoder = Seq.fill(coreParams.nGroups) (Module(new MessageEncoder(coreParams)))
 
   // buffers
-  val message_buffer  = Module(new MultiPortQueueDecoupled(new MessageBundle(coreParams), coreParams.nGroups, outer.bufferDepth))
-  val metadata_buffer = Module(new MultiPortQueueDecoupled(new MetaDataBundle(coreParams), coreParams.nGroups, outer.bufferDepth))
-  val byte_buffer     = Module(new MultiPortQueueDecoupled(UInt(8.W), coreParams.nGroups, outer.bufferDepth))
+  val message_buffer  = Module(new MultiPortQueue(new MessageBundle(coreParams), coreParams.nGroups, outer.bufferDepth))
+  val metadata_buffer = Module(new MultiPortQueue(new MetaDataBundle(coreParams), coreParams.nGroups, outer.bufferDepth))
+  val byte_buffer     = Module(new MultiPortQueue(UInt(8.W), coreParams.nGroups, outer.bufferDepth))
   // val message_buffer = Module(new Queue(new MessageBundle(coreParams), outer.bufferDepth))
   // val byte_buffer = Module(new Queue(UInt(8.W), outer.bufferDepth)) // buffer compressed packet or full header
   // val metadata_buffer = Module(new Queue(new MetaDataBundle(coreParams), outer.bufferDepth))
@@ -248,6 +249,7 @@ class TacitEncoderModule(outer: TacitEncoder) extends LazyTraceEncoderModule(out
   val ingress_0_has_ij = ingress_0.group.map(g => (g.itype === TraceItype.ITInJump) && g.iretire === 1.U).reduce(_ || _)
   val ingress_0_has_flush = ingress_0_has_message && !ingress_0_has_branch && !ingress_0_has_ij
   val ingress_0_msg_idx = PriorityEncoder(ingress_0.group.map(g => g.itype =/= TraceItype.ITNothing && g.iretire === 1.U))
+  val ingress_0_insn_idx = PriorityEncoder(ingress_0.group.map(g => g.iretire === 1.U))
   
   val ingress_1_has_message = ingress_1.group.map(g => g.itype =/= TraceItype.ITNothing && g.iretire === 1.U).reduce(_ || _)
   val ingress_1_has_branch = ingress_1.group.map(g => (g.itype === TraceItype.ITBrTaken || g.itype === TraceItype.ITBrNTaken) && g.iretire === 1.U).reduce(_ || _)
@@ -256,9 +258,28 @@ class TacitEncoderModule(outer: TacitEncoder) extends LazyTraceEncoderModule(out
 
   val ingress_1_valid_count = PopCount(ingress_1.group.map(g => g.iretire === 1.U))
 
-  val target_addr_msg = Mux(ingress_1_msg_idx === (ingress_1_valid_count - 1.U), // am I the last message?
-                            (ingress_1.group(ingress_1_msg_idx).iaddr ^ ingress_0.group(0).iaddr) >> 1.U,
-                            (ingress_1.group(ingress_1_msg_idx).iaddr ^ ingress_1.group(ingress_1_msg_idx + 1.U).iaddr) >> 1.U)
+  dontTouch(ingress_0_insn_idx)
+  dontTouch(ingress_1_valid_count)
+
+  val target_addr_msg = VecInit(
+    (0 until coreParams.nGroups).map { i =>
+      val laterValids = VecInit(
+        (0 until coreParams.nGroups).map { j =>
+          if (j > i) (ingress_1.group(j).iretire === 1.U) else false.B
+        }
+      )
+
+      val isLastValid = (ingress_1.group(i).iretire === 1.U) && !laterValids.asUInt.orR
+
+      val nextIdx = math.min(i + 1, coreParams.nGroups - 1)
+
+      Mux(
+        isLastValid,
+        (ingress_1.group(i).iaddr ^ ingress_0.group(ingress_0_insn_idx).iaddr) >> 1.U,
+        (ingress_1.group(i).iaddr ^ ingress_1.group(nextIdx).iaddr) >> 1.U
+      )
+    }
+  )
   
 
   // Connect all message encoders to the multiport queue
@@ -277,14 +298,18 @@ class TacitEncoderModule(outer: TacitEncoder) extends LazyTraceEncoderModule(out
 
   // stall if any buffer is almost full 
   // technically it should always the byte buffer, but just to be safe
-  stall := stallThreshold(message_buffer.io.count) // || stallThreshold(target_addr_buffer.io.count) || stallThreshold(time_buffer.io.count) || stallThreshold(byte_buffer.io.count)
+  stall := stallThreshold(message_buffer.io.count) || stallThreshold(byte_buffer.io.count) || stallThreshold(metadata_buffer.io.count)
   io.stall := stall
+  when(stall) {
+    printf("stall\n")
+  }
+  
   
   val sent = RegInit(false.B)
   // reset takes priority over enqueue
   when (pipeline_advance) {
     sent := false.B
-  } .elsewhen (byte_buffer.io.enqFire.reduce(_ || _)) {
+  } .elsewhen (byte_buffer.io.enq_fire.reduce(_ || _)) {
     sent := true.B
   }
 
@@ -327,7 +352,7 @@ class TacitEncoderModule(outer: TacitEncoder) extends LazyTraceEncoderModule(out
       is_compressed(0) := false.B
       packet_valid(0) := !sent
       // state transition: wait for message to go in
-      state := Mux(pipeline_advance && (sent || byte_buffer.io.enqFire.reduce(_ || _)), Mux(io.control.enable, sData, sIdle), sSync)
+      state := Mux(pipeline_advance && (sent || byte_buffer.io.enq_fire.reduce(_ || _)), Mux(io.control.enable, sData, sIdle), sSync)
     }
     is (sData) {
       when (!io.control.enable) {
@@ -362,7 +387,7 @@ class TacitEncoderModule(outer: TacitEncoder) extends LazyTraceEncoderModule(out
           header_byte(ingress_1_msg_idx) := HeaderByte(FullHeaderType.FNotTakenBranch)
           comp_header(ingress_1_msg_idx) := CompressedHeaderType.CNT.asUInt
           message_encoder(0).io.time_encoder_input := delta_time
-          prev_time := Mux(byte_buffer.io.enqFire.reduce(_ || _), ingress_1.time, prev_time)
+          prev_time := Mux(byte_buffer.io.enq_fire.reduce(_ || _), ingress_1.time, prev_time)
           is_compressed(ingress_1_msg_idx) := delta_time <= MAX_DELTA_TIME_COMP.U
           packet_valid(ingress_1_msg_idx) := !sent && is_bp_mode
           message_type(ingress_1_msg_idx) := MessageType.BPMiss
@@ -382,7 +407,7 @@ class TacitEncoderModule(outer: TacitEncoder) extends LazyTraceEncoderModule(out
                   header_byte(i) := HeaderByte(FullHeaderType.FTakenBranch)
                   comp_header(i) := CompressedHeaderType.CTB.asUInt
                   message_encoder(i).io.time_encoder_input := delta_time
-                  prev_time := Mux(byte_buffer.io.enqFire.reduce(_ || _), ingress_1.time, prev_time)
+                  prev_time := Mux(byte_buffer.io.enq_fire.reduce(_ || _), ingress_1.time, prev_time)
                   is_compressed(i) := delta_time <= MAX_DELTA_TIME_COMP.U
                   packet_valid(i) := !sent && is_bt_mode
                   message_type(i) := MessageType.Branch
@@ -391,7 +416,7 @@ class TacitEncoderModule(outer: TacitEncoder) extends LazyTraceEncoderModule(out
                   header_byte(i) := HeaderByte(FullHeaderType.FNotTakenBranch)
                   comp_header(i) := CompressedHeaderType.CNT.asUInt
                   message_encoder(i).io.time_encoder_input := delta_time
-                  prev_time := Mux(byte_buffer.io.enqFire.reduce(_ || _), ingress_1.time, prev_time)
+                  prev_time := Mux(byte_buffer.io.enq_fire.reduce(_ || _), ingress_1.time, prev_time)
                   is_compressed(i) := delta_time <= MAX_DELTA_TIME_COMP.U
                   packet_valid(i) := !sent && is_bt_mode
                   message_type(i) := MessageType.Branch
@@ -400,7 +425,7 @@ class TacitEncoderModule(outer: TacitEncoder) extends LazyTraceEncoderModule(out
                   header_byte(i) := HeaderByte(FullHeaderType.FInfJump)
                   comp_header(i) := CompressedHeaderType.CIJ.asUInt
                   message_encoder(i).io.time_encoder_input := delta_time
-                  prev_time := Mux(byte_buffer.io.enqFire.reduce(_ || _), ingress_1.time, prev_time)
+                  prev_time := Mux(byte_buffer.io.enq_fire.reduce(_ || _), ingress_1.time, prev_time)
                   is_compressed(i) := delta_time <= MAX_DELTA_TIME_COMP.U
                   packet_valid(i) := !sent && is_bt_mode
                   message_type(i) := MessageType.InfJump
@@ -408,8 +433,8 @@ class TacitEncoderModule(outer: TacitEncoder) extends LazyTraceEncoderModule(out
                 is (TraceItype.ITUnJump) {
                   header_byte(i) := HeaderByte(FullHeaderType.FUninfJump)
                   message_encoder(i).io.time_encoder_input := delta_time 
-                  prev_time := Mux(byte_buffer.io.enqFire.reduce(_ || _), ingress_1.time, prev_time)
-                  message_encoder(i).io.target_addr_encoder_input := target_addr_msg
+                  prev_time := Mux(byte_buffer.io.enq_fire.reduce(_ || _), ingress_1.time, prev_time)
+                  message_encoder(i).io.target_addr_encoder_input := target_addr_msg(i)
                   is_compressed(i) := false.B
                   packet_valid(i) := !sent
                   message_type(i) := MessageType.UninfJump
@@ -418,8 +443,8 @@ class TacitEncoderModule(outer: TacitEncoder) extends LazyTraceEncoderModule(out
                   header_byte(i) := HeaderByte.from_trap_type(FullHeaderType.FTrap, TrapType.TException)
                   comp_header(i) := CompressedHeaderType.CNA.asUInt
                   message_encoder(i).io.time_encoder_input := delta_time
-                  prev_time := Mux(byte_buffer.io.enqFire.reduce(_ || _), ingress_1.time, prev_time)
-                  message_encoder(i).io.target_addr_encoder_input := target_addr_msg
+                  prev_time := Mux(byte_buffer.io.enq_fire.reduce(_ || _), ingress_1.time, prev_time)
+                  message_encoder(i).io.target_addr_encoder_input := target_addr_msg(i)
                   message_encoder(i).io.trap_addr_encoder_input := ingress_1.group(ingress_1_msg_idx).iaddr >> 1.U
                   message_encoder(i).io.prv_encoder_from_priv_input := ingress_1.priv
                   message_encoder(i).io.prv_encoder_to_priv_input := ingress_0.priv
@@ -431,8 +456,8 @@ class TacitEncoderModule(outer: TacitEncoder) extends LazyTraceEncoderModule(out
                   header_byte(i) := HeaderByte.from_trap_type(FullHeaderType.FTrap, TrapType.TInterrupt)
                   comp_header(i) := CompressedHeaderType.CNA.asUInt
                   message_encoder(i).io.time_encoder_input := delta_time
-                  prev_time := Mux(byte_buffer.io.enqFire.reduce(_ || _), ingress_1.time, prev_time)
-                  message_encoder(i).io.target_addr_encoder_input := target_addr_msg
+                  prev_time := Mux(byte_buffer.io.enq_fire.reduce(_ || _), ingress_1.time, prev_time)
+                  message_encoder(i).io.target_addr_encoder_input := target_addr_msg(i)
                   message_encoder(i).io.trap_addr_encoder_input := ingress_1.group(ingress_1_msg_idx).iaddr >> 1.U
                   message_encoder(i).io.prv_encoder_from_priv_input := ingress_1.priv
                   message_encoder(i).io.prv_encoder_to_priv_input := ingress_0.priv
@@ -444,8 +469,8 @@ class TacitEncoderModule(outer: TacitEncoder) extends LazyTraceEncoderModule(out
                   header_byte(i) := HeaderByte.from_trap_type(FullHeaderType.FTrap, TrapType.TReturn)
                   comp_header(i) := CompressedHeaderType.CNA.asUInt
                   message_encoder(i).io.time_encoder_input := delta_time
-                  prev_time := Mux(byte_buffer.io.enqFire.reduce(_ || _), ingress_1.time, prev_time)
-                  message_encoder(i).io.target_addr_encoder_input := target_addr_msg
+                  prev_time := Mux(byte_buffer.io.enq_fire.reduce(_ || _), ingress_1.time, prev_time)
+                  message_encoder(i).io.target_addr_encoder_input := target_addr_msg(i)
                   message_encoder(i).io.trap_addr_encoder_input := ingress_1.group(ingress_1_msg_idx).iaddr >> 1.U
                   message_encoder(i).io.prv_encoder_from_priv_input := ingress_1.priv
                   message_encoder(i).io.prv_encoder_to_priv_input := ingress_0.priv

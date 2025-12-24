@@ -3,58 +3,61 @@ package tacit
 import chisel3._
 import chisel3.util._
 
-class MultiPortQueueDecoupled[T <: Data](gen: T, val nPorts: Int, val depth: Int) extends Module {
+class MultiPortQueue[T <: Data](gen: T, val nPorts: Int, val depth: Int) extends Module {
+  require(depth > 0, "Queue depth must be positive")
+  require(nPorts > 0, "Number of enqueue ports must be positive")
+
   val io = IO(new Bundle {
     val enq = Flipped(Vec(nPorts, Decoupled(gen)))
     val deq = Decoupled(gen)
-    // expose helper signals
-    val enqFire = Output(Vec(nPorts, Bool()))
-    val deqFire = Output(Bool())
-    val count   = Output(UInt(log2Ceil(depth + 1).W))
+    val enq_fire = Output(Vec(nPorts, Bool()))
+    val deq_fire = Output(Bool())
+    val count = Output(UInt(log2Ceil(depth + 1).W))
   })
 
-  // internal single-port queue
-  val queue = Module(new Queue(gen, depth))
-  queue.io.deq <> io.deq
-
-  val validMask = io.enq.map(_.valid)
-  val enqIdx = PriorityEncoder(validMask)
-
-  for (i <- 0 until nPorts) { io.enq(i).ready := false.B }
-
-  val enq_bits = WireInit(0.U.asTypeOf(io.enq(0).bits))
-
-    // only override the chosen port
-    when (queue.io.enq.ready && validMask.reduce(_||_)) {
-    enq_bits := io.enq(enqIdx).bits
-    io.enq(enqIdx).ready := true.B
-    }
-
-    // connect to internal queue
-    queue.io.enq.bits := enq_bits
-    queue.io.enq.valid := queue.io.enq.ready && validMask.reduce(_||_)
-
-  when (queue.io.enq.ready && validMask.reduce(_||_)) {
-    queue.io.enq.bits := io.enq(enqIdx).bits
-    queue.io.enq.valid := true.B
-    io.enq(enqIdx).ready := true.B
-  } .otherwise {
-    queue.io.enq.valid := false.B
+  for (i <- 0 until nPorts) {
+    io.enq(i).ready := false.B
   }
-  // fire signals (initialize to zero)
-  val enq_fire = WireInit(VecInit(Seq.fill(nPorts)(false.B)))
-  val deq_fire = WireInit(false.B)
 
-  for (i <- 0 until nPorts) { enq_fire(i) := io.enq(i).valid && io.enq(i).ready }
-  deq_fire := queue.io.deq.valid && queue.io.deq.ready
+  val queue = Reg(Vec(depth, gen))
+  val enq_ptr = RegInit(0.U(log2Ceil(depth).W))
+  val deq_ptr = RegInit(0.U(log2Ceil(depth).W))
+  val occupancy = RegInit(0.U((log2Ceil(depth + 1)).W))
 
-  // count (initialize to zero)
-  val countReg = RegInit(0.U(log2Ceil(depth + 1).W))
-  when (enq_fire.reduce(_||_) && !deq_fire) { countReg := countReg + 1.U }
-  .elsewhen (!enq_fire.reduce(_||_) && deq_fire) { countReg := countReg - 1.U }
+  // determine which enqueue ports can actually fire
+  val enq_fire_vec = Wire(Vec(nPorts, Bool()))
+  for (i <- 0 until nPorts) {
+    enq_fire_vec(i) := io.enq(i).valid && (occupancy + (i + 1).U <= depth.U)
+    io.enq_fire(i) := enq_fire_vec(i)
+  }
 
-  // cnnect to IO (all outputs driven)
-  io.enqFire := enq_fire
-  io.deqFire := deq_fire
-  io.count   := countReg
+  // compute how many enqueues actually happen
+  val enqCount = enq_fire_vec.map(b => b.asUInt).reduce(_ +& _)
+
+  // write to queue for each firing enqueue port
+  var tempenq_ptr = enq_ptr
+  for (i <- 0 until nPorts) {
+    when(enq_fire_vec(i)) {
+      queue(tempenq_ptr) := io.enq(i).bits
+    }
+    // update temp pointer combinationally
+    tempenq_ptr = Mux(enq_fire_vec(i), (tempenq_ptr + 1.U) % depth.U, tempenq_ptr)
+  }
+  enq_ptr := tempenq_ptr
+
+  // dequeue logic
+  val deqValid = occupancy =/= 0.U
+  io.deq.valid := deqValid
+  io.deq.bits := queue(deq_ptr)
+  io.deq_fire := io.deq.fire
+
+  when(io.deq.fire) {
+    deq_ptr := (deq_ptr + 1.U) % depth.U
+  }
+
+  // update occupancy
+  occupancy := occupancy + enqCount - io.deq.fire.asUInt
+
+  // output count
+  io.count := occupancy
 }
