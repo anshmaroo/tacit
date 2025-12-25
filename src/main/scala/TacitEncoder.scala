@@ -300,8 +300,24 @@ class TacitEncoderModule(outer: TacitEncoder) extends LazyTraceEncoderModule(out
   // technically it should always the byte buffer, but just to be safe
   stall := stallThreshold(message_buffer.io.count) || stallThreshold(byte_buffer.io.count) || stallThreshold(metadata_buffer.io.count)
   io.stall := stall
-  when(stall) {
-    printf("stall\n")
+  
+
+  val stall_counter = RegInit(0.U(128.W))
+  val cycle_counter = RegInit(0.U(128.W))
+  val prev_enable = RegInit(false.B)
+  prev_enable := io.control.enable
+
+  when (io.control.enable) {
+    cycle_counter := cycle_counter + 1.U
+    when (io.stall) {
+      stall_counter := stall_counter + 1.U
+    }
+  }
+  
+
+  when (~io.control.enable && prev_enable) {
+    printf("stall cycles: 0x%x\n", stall_counter)
+    printf("total traced cycles: 0x%x\n", cycle_counter)
   }
   
   
