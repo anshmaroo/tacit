@@ -111,7 +111,7 @@ class TacitEncoderModule(outer: TacitEncoder) extends LazyTraceEncoderModule(out
   val coreParams = outer.coreParams
 
   val MAX_DELTA_TIME_COMP = 0x3F // 63, 6 bits
-  def stallThreshold(count: UInt) = count >= (outer.bufferDepth - outer.coreStages - coreParams.nGroups).U
+  def stallThreshold(count: UInt, enq_count: UInt) = (count + enq_count) > (outer.bufferDepth - outer.coreStages).U
 
   // mode of operation
   // 0: branch target only
@@ -298,7 +298,11 @@ class TacitEncoderModule(outer: TacitEncoder) extends LazyTraceEncoderModule(out
 
   // stall if any buffer is almost full 
   // technically it should always the byte buffer, but just to be safe
-  stall := stallThreshold(message_buffer.io.count) || stallThreshold(byte_buffer.io.count) || stallThreshold(metadata_buffer.io.count)
+  val actual_enq = PopCount(byte_buffer.io.enq_fire)
+  val enq = PopCount(packet_valid)
+  stall := stallThreshold(byte_buffer.io.count, enq) ||
+    stallThreshold(metadata_buffer.io.count, enq) ||
+    stallThreshold(message_buffer.io.count, enq)
   io.stall := stall
   
 
@@ -354,7 +358,7 @@ class TacitEncoderModule(outer: TacitEncoder) extends LazyTraceEncoderModule(out
       message_encoder(0).io.time_encoder_input := ingress_0.time
       prev_time := ingress_0.time
       // target address
-      message_encoder(0).io.target_addr_encoder_input := ingress_0.group(0).iaddr >> 1.U // last bit is always 0
+      message_encoder(0).io.target_addr_encoder_input := ingress_0.group(ingress_0_insn_idx).iaddr >> 1.U // last bit is always 0
       // prv
       message_encoder(0).io.prv_encoder_from_priv_input := 0b00.U
       message_encoder(0).io.prv_encoder_to_priv_input := ingress_0.priv
