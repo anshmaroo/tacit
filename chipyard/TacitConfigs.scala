@@ -82,12 +82,35 @@ class TacitShuttleConfig extends Config(
 
 // Medium Boom with Tacit encoder and trace sinks
 class TacitMediumBoomConfig extends Config(
+  new boom.v3.common.WithBoomCommitLogPrintf ++
   new tacit.WithTraceSinkDMA(1) ++
   new tacit.WithTraceSinkAlways(0) ++
   new chipyard.config.WithTraceArbiterMonitor ++
   new chipyard.WithTacitEncoder ++
   new freechips.rocketchip.subsystem.WithoutTLMonitors ++
   new boom.v3.common.WithNMediumBooms(1) ++
+  new chipyard.config.AbstractConfig)
+
+// Large Boom with Tacit encoder and trace sinks
+class TacitLargeBoomConfig extends Config(
+  new boom.v3.common.WithBoomCommitLogPrintf ++
+  new tacit.WithTraceSinkDMA(1) ++
+  new tacit.WithTraceSinkAlways(0) ++
+  new chipyard.config.WithTraceArbiterMonitor ++
+  new chipyard.WithTacitEncoder ++
+  new freechips.rocketchip.subsystem.WithoutTLMonitors ++
+  new boom.v3.common.WithNLargeBooms(1) ++
+  new chipyard.config.AbstractConfig)
+
+// Mega Boom with Tacit encoder and trace sinks
+class TacitMegaBoomConfig extends Config(
+  new boom.v3.common.WithBoomCommitLogPrintf ++
+  new tacit.WithTraceSinkDMA(1) ++
+  new tacit.WithTraceSinkAlways(0) ++
+  new chipyard.config.WithTraceArbiterMonitor ++
+  new chipyard.WithTacitEncoder ++
+  new freechips.rocketchip.subsystem.WithoutTLMonitors ++
+  new boom.v3.common.WithNMegaBooms(1) ++
   new chipyard.config.AbstractConfig)
 
 
