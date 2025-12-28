@@ -24,8 +24,9 @@ class WithTacitEncoder extends Config((site, here, up) => {
         ),
         bufferDepth = 16,
         coreStages = 5,
-        bpParams = TacitBPParams(xlen = tp.tileParams.core.xLen, n_entries = 1024))(p)),
-        useArbiterMonitor = false
+        bpParams = TacitBPParams(xlen = tp.tileParams.core.xLen, n_entries = 1024), outBytes = 1)(p)),
+        useArbiterMonitor = false,
+        outBytes = 1
       )),
       core = tp.tileParams.core.copy(enableTraceCoreIngress = true)))
     case tp: ShuttleTileAttachParams => tp.copy(tileParams = tp.tileParams.copy(
@@ -38,8 +39,9 @@ class WithTacitEncoder extends Config((site, here, up) => {
         ),
         bufferDepth = 16,
         coreStages = 7,
-        bpParams = TacitBPParams(xlen = tp.tileParams.core.xLen, n_entries = 1024))(p)),
-        useArbiterMonitor = false
+        bpParams = TacitBPParams(xlen = tp.tileParams.core.xLen, n_entries = 1024), outBytes = 1)(p)),
+        useArbiterMonitor = false,
+        outBytes = 1
       )),
       core = tp.tileParams.core.copy(enableTraceCoreIngress = true)))
     case tp: BoomTileAttachParams => tp.copy(tileParams = tp.tileParams.copy(
@@ -52,8 +54,9 @@ class WithTacitEncoder extends Config((site, here, up) => {
         ),
         bufferDepth = 16,
         coreStages = 7,
-        bpParams = TacitBPParams(xlen = tp.tileParams.core.xLen, n_entries = 1024))(p)),
-        useArbiterMonitor = false
+        bpParams = TacitBPParams(xlen = tp.tileParams.core.xLen, n_entries = 1024), outBytes = 4)(p)),
+        useArbiterMonitor = false,
+        outBytes = 4
       )),
       core = tp.tileParams.core.copy(enableTraceCoreIngress = true)))
   }

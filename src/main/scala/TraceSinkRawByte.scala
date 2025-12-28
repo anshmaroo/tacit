@@ -27,7 +27,7 @@ object TraceSinkRawByteNodeImp extends SimpleNodeImp[NullParams, NullParams, Nul
 case class TraceSinkRawByteMasterNode()(implicit valName: ValName) extends SourceNode(TraceSinkRawByteNodeImp)(Seq(NullParams()))
 case class TraceSinkRawByteSlaveNode()(implicit valName: ValName) extends SinkNode(TraceSinkRawByteNodeImp)(Seq(NullParams()))
 
-class TraceSinkRawByte()(implicit p: Parameters) extends LazyTraceSink {
+class TraceSinkRawByte()(implicit p: Parameters, override val in_bytes: Int) extends LazyTraceSink {
   val node = new TraceSinkRawByteMasterNode()(ValName("trace_sink_raw_byte"))
   override lazy val module = new TraceSinkRawByteImpl(this)
   class TraceSinkRawByteImpl(outer: TraceSinkRawByte) extends LazyTraceSinkModuleImp(outer) {
@@ -40,19 +40,19 @@ class WithTraceSinkRawByte(targetId: Int = 0) extends Config((site, here, up) =>
     case tp: RocketTileAttachParams => {
       tp.copy(tileParams = tp.tileParams.copy(
         traceParams = Some(tp.tileParams.traceParams.get.copy(buildSinks = 
-          tp.tileParams.traceParams.get.buildSinks :+ (p => (LazyModule(new TraceSinkRawByte()(p)), targetId)))))
+          tp.tileParams.traceParams.get.buildSinks :+ (p => (LazyModule(new TraceSinkRawByte()(p, in_bytes=1)), targetId)))))
       )
     }
     case tp: ShuttleTileAttachParams => {
       tp.copy(tileParams = tp.tileParams.copy(
         traceParams = Some(tp.tileParams.traceParams.get.copy(buildSinks = 
-          tp.tileParams.traceParams.get.buildSinks :+ (p => (LazyModule(new TraceSinkRawByte()(p)), targetId)))))
+          tp.tileParams.traceParams.get.buildSinks :+ (p => (LazyModule(new TraceSinkRawByte()(p, in_bytes=1)), targetId)))))
       )
     }
     case tp: BoomTileAttachParams => {
       tp.copy(tileParams = tp.tileParams.copy(
         traceParams = Some(tp.tileParams.traceParams.get.copy(buildSinks = 
-          tp.tileParams.traceParams.get.buildSinks :+ (p => (LazyModule(new TraceSinkRawByte()(p)), targetId)))))
+          tp.tileParams.traceParams.get.buildSinks :+ (p => (LazyModule(new TraceSinkRawByte()(p, in_bytes=4)), targetId)))))
       )
     }
     case other => other

@@ -19,7 +19,7 @@ case class TraceSinkDMAParams(
   beatBytes: Int
 )
 
-class TraceSinkDMA(params: TraceSinkDMAParams, hartId: Int)(implicit p: Parameters) extends LazyTraceSink {
+class TraceSinkDMA(params: TraceSinkDMAParams, hartId: Int)(implicit p: Parameters, override val in_bytes: Int) extends LazyTraceSink {
   val node = TLClientNode(Seq(TLMasterPortParameters.v1(Seq(TLClientParameters(
     name = "trace-sink-dma", sourceId = IdRange(0, 16))))))
 
@@ -33,7 +33,8 @@ class TraceSinkDMA(params: TraceSinkDMAParams, hartId: Int)(implicit p: Paramete
   lazy val module = new TraceSinkDMAImpl(this)
   class TraceSinkDMAImpl(outer: TraceSinkDMA) extends LazyTraceSinkModuleImp(outer) {
     val fifo = Module(new Queue(UInt(8.W), 32))
-    fifo.io.enq <> io.trace_in
+    fifo.io.enq.bits := 0.U
+    fifo.io.enq.valid := 1.U
     val (mem, edge) = outer.node.out(0)
     val addrBits = edge.bundle.addressBits
     val busWidth = edge.bundle.dataBits
@@ -152,7 +153,7 @@ class WithTraceSinkDMA(targetId: Int = 1) extends Config((site, here, up) => {
           tp.tileParams.traceParams.get.buildSinks :+ (p => 
             (LazyModule(new TraceSinkDMA(TraceSinkDMAParams(
             regNodeBaseAddr = 0x3010000 + tp.tileParams.tileId * 0x1000,
-            beatBytes = xBytes), hartId = tp.tileParams.tileId)(p)), targetId)))))
+            beatBytes = xBytes), hartId = tp.tileParams.tileId)(p, in_bytes=1)), targetId)))))
       )
     }
     case tp: ShuttleTileAttachParams => {
@@ -162,7 +163,7 @@ class WithTraceSinkDMA(targetId: Int = 1) extends Config((site, here, up) => {
           tp.tileParams.traceParams.get.buildSinks :+ (p => 
             (LazyModule(new TraceSinkDMA(TraceSinkDMAParams(
             regNodeBaseAddr = 0x3010000 + tp.tileParams.tileId * 0x1000,
-            beatBytes = xBytes), hartId = tp.tileParams.tileId)(p)), targetId)))))
+            beatBytes = xBytes), hartId = tp.tileParams.tileId)(p, in_bytes=1)), targetId)))))
       )
     }
     case tp: BoomTileAttachParams => {
@@ -172,7 +173,7 @@ class WithTraceSinkDMA(targetId: Int = 1) extends Config((site, here, up) => {
           tp.tileParams.traceParams.get.buildSinks :+ (p => 
             (LazyModule(new TraceSinkDMA(TraceSinkDMAParams(
             regNodeBaseAddr = 0x3010000 + tp.tileParams.tileId * 0x1000,
-            beatBytes = xBytes), hartId = tp.tileParams.tileId)(p)), targetId)))))
+            beatBytes = xBytes), hartId = tp.tileParams.tileId)(p, in_bytes=4)), targetId)))))
       )
     }
     case other => other

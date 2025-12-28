@@ -101,8 +101,8 @@ class MetaDataBundle(val coreParams: TraceCoreParams) extends Bundle with MetaDa
 }
 
 
-class TacitEncoder(override val coreParams: TraceCoreParams, val bufferDepth: Int, val coreStages: Int, val bpParams: TacitBPParams)(implicit p: Parameters) 
-    extends LazyTraceEncoder(coreParams)(p) {
+class TacitEncoder(override val coreParams: TraceCoreParams, val bufferDepth: Int, val coreStages: Int, val bpParams: TacitBPParams, override val outBytes: Int)(implicit p: Parameters) 
+    extends LazyTraceEncoder(coreParams, outBytes)(p) {
   override lazy val module = new TacitEncoderModule(this)
 }
 
@@ -188,11 +188,12 @@ class TacitEncoderModule(outer: TacitEncoder) extends LazyTraceEncoderModule(out
   
 
   // packetization of buffered message
-  val trace_packetizer = Module(new TracePacketizer(coreParams))
+  val trace_packetizer = Module(new TracePacketizer(coreParams, outer.outBytes))
   trace_packetizer.io.message <> message_buffer.io.deq
   trace_packetizer.io.metadata <> metadata_buffer.io.deq
   trace_packetizer.io.byte <> byte_buffer.io.deq
   trace_packetizer.io.out <> io.out
+  trace_packetizer.io.out_count <> io.out_count
 
   // metadata packing
   val metadata = Wire(Vec(coreParams.nGroups, new MetaDataBundle(coreParams)))
@@ -315,8 +316,10 @@ class TacitEncoderModule(outer: TacitEncoder) extends LazyTraceEncoderModule(out
     cycle_counter := cycle_counter + 1.U
     when (io.stall) {
       stall_counter := stall_counter + 1.U
+      printf("stall!\n")
     }
   }
+  
   
 
   when (~io.control.enable && prev_enable) {

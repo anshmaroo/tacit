@@ -12,7 +12,7 @@ import boom.v3.common.BoomTileAttachParams
 
 import freechips.rocketchip.trace._
 
-class TraceSinkAlways()(implicit p: Parameters) extends LazyTraceSink {
+class TraceSinkAlways()(implicit p: Parameters, override val in_bytes: Int) extends LazyTraceSink {
   override lazy val module = new TraceSinkAlwaysImpl(this)
   class TraceSinkAlwaysImpl(outer: TraceSinkAlways) extends LazyTraceSinkModuleImp(outer) {
     io.trace_in.ready := true.B
@@ -24,19 +24,19 @@ class WithTraceSinkAlways(targetId: Int = 0) extends Config((site, here, up) => 
     case tp: RocketTileAttachParams => {
       tp.copy(tileParams = tp.tileParams.copy(
         traceParams = Some(tp.tileParams.traceParams.get.copy(buildSinks = 
-          tp.tileParams.traceParams.get.buildSinks :+ (p => (LazyModule(new TraceSinkAlways()(p)), targetId)))))
+          tp.tileParams.traceParams.get.buildSinks :+ (p => (LazyModule(new TraceSinkAlways()(p, in_bytes=1)), targetId)))))
       )
     }
     case tp: ShuttleTileAttachParams => {
       tp.copy(tileParams = tp.tileParams.copy(
         traceParams = Some(tp.tileParams.traceParams.get.copy(buildSinks = 
-          tp.tileParams.traceParams.get.buildSinks :+ (p => (LazyModule(new TraceSinkAlways()(p)), targetId)))))
+          tp.tileParams.traceParams.get.buildSinks :+ (p => (LazyModule(new TraceSinkAlways()(p, in_bytes=1)), targetId)))))
       )
     }
     case tp: BoomTileAttachParams => {
       tp.copy(tileParams = tp.tileParams.copy(
         traceParams = Some(tp.tileParams.traceParams.get.copy(buildSinks = 
-          tp.tileParams.traceParams.get.buildSinks :+ (p => (LazyModule(new TraceSinkAlways()(p)), targetId)))))
+          tp.tileParams.traceParams.get.buildSinks :+ (p => (LazyModule(new TraceSinkAlways()(p, in_bytes=4)), targetId)))))
       )
     }
     case other => other
@@ -48,19 +48,19 @@ class WithHPMSinkAlways(targetId: Int = 0) extends Config((site, here, up) => {
     case tp: RocketTileAttachParams => {
       tp.copy(tileParams = tp.tileParams.copy(
         traceParams = Some(tp.tileParams.traceParams.get.copy(buildSinks = 
-          tp.tileParams.traceParams.get.buildSinks :+ (p => (LazyModule(new TraceSinkAlways()(p)), targetId)))))
+          tp.tileParams.traceParams.get.buildSinks :+ (p => (LazyModule(new TraceSinkAlways()(p, in_bytes=1)), targetId)))))
       )
     }
     case tp: ShuttleTileAttachParams => {
       tp.copy(tileParams = tp.tileParams.copy(
         traceParams = Some(tp.tileParams.traceParams.get.copy(buildSinks = 
-          tp.tileParams.traceParams.get.buildSinks :+ (p => (LazyModule(new TraceSinkAlways()(p)), targetId)))))
+          tp.tileParams.traceParams.get.buildSinks :+ (p => (LazyModule(new TraceSinkAlways()(p, in_bytes=1)), targetId)))))
       )
     }
     case tp: BoomTileAttachParams => {
       tp.copy(tileParams = tp.tileParams.copy(
         traceParams = Some(tp.tileParams.traceParams.get.copy(buildSinks = 
-          tp.tileParams.traceParams.get.buildSinks :+ (p => (LazyModule(new TraceSinkAlways()(p)), targetId)))))
+          tp.tileParams.traceParams.get.buildSinks :+ (p => (LazyModule(new TraceSinkAlways()(p, in_bytes=4)), targetId)))))
       )
     }
     case other => other
